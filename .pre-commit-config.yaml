@@ -1,12 +1,18 @@
 # See https://pre-commit.com for more information
+# Ruff and ruff-format run via uv so they use the same version as CI (uv run ruff).
 repos:
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.8.4
+  - repo: local
     hooks:
       - id: ruff
-        args: [--config, pyproject.toml]
+        name: ruff
+        entry: uv run ruff check
+        language: system
+        types: [python]
       - id: ruff-format
-        args: [--config, pyproject.toml]
+        name: ruff-format
+        entry: uv run ruff format
+        language: system
+        types: [python]
 
   - repo: local
     hooks:

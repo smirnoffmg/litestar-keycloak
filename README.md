@@ -1,82 +1,140 @@
 # litestar-keycloak
 
-A GitHub repository template for Python packages using [uv](https://docs.astral.sh/uv/), with ruff, mypy, pytest, pre-commit, MkDocs (API docs via mkdocstrings), GitHub Pages, and automatic PyPI release via trusted publishing.
+Keycloak authentication plugin for [Litestar](https://litestar.dev/).
+OIDC/OAuth2 integration using Litestar's native plugin protocol, dependency injection, and guard system.
 
-**Use this template** — click "Use this template" above to create a new repo from this template.
+## Features
 
-### After creating your repo: replace the placeholder name
-
-Run the Makefile with your **distribution name** (PyPI/repo, use hyphens) and **module name** (for `import` / `python -m`, use underscores):
-
-```bash
-make rename DIST_NAME=my-tool MODULE_NAME=my_tool
-```
-
-Then run `uv sync`, `uv run pytest`, and `uv run ruff check .` to confirm everything works.
-
-**Manual alternative** — replace `litestar-keycloak` and `litestar_keycloak` everywhere:
-
-| Location                                 | Change                                                                            |
-| ---------------------------------------- | --------------------------------------------------------------------------------- |
-| **Rename directory**                     | `src/litestar_keycloak/` → `src/<your_module>/` (e.g. `src/my_package/`)   |
-| [pyproject.toml](pyproject.toml)         | `name = "..."` (PyPI name); `[tool.mypy]` → `packages = ["src/<your_module>"]`    |
-| Python files in `src/`                   | Imports and any string that mentions the old name (e.g. the `print` in `main.py`) |
-| [tests/test_main.py](tests/test_main.py) | `from <your_module> import ...` and the assertion text                            |
-| [docs/api.md](docs/api.md)               | `::: <your_module>` (mkdocstrings directive)                                      |
-| [docs/index.md](docs/index.md)           | Title and `python -m <your_module>` in the usage example                          |
-| [mkdocs.yml](mkdocs.yml)                 | `site_name:` and `site_url:`                                                      |
-| This README                              | Title (above) and the `python -m` command in Usage                                |
+- OIDC discovery and JWKS caching with automatic key rotation
+- Bearer token validation (header or cookie)
+- Realm and client role guards
+- Scope-based access control
+- `KeycloakUser` injection via Litestar DI
+- Optional login/callback/logout route group
+- Zero HTTP dependencies — uses only Python stdlib for HTTP calls
 
 ## Installation
 
 ```bash
-uv sync
+pip install litestar-keycloak
 ```
 
-Or with pip:
+## Quick Start
 
-```bash
-pip install -e .
+```python
+from litestar import Litestar, get
+from litestar_keycloak import KeycloakPlugin, KeycloakConfig, KeycloakUser
+
+@get("/me")
+async def me(current_user: KeycloakUser) -> dict:
+    return {
+        "sub": current_user.sub,
+        "username": current_user.preferred_username,
+        "roles": current_user.realm_roles,
+    }
+
+app = Litestar(
+    route_handlers=[me],
+    plugins=[KeycloakPlugin(
+        KeycloakConfig(
+            server_url="https://keycloak.example.com",
+            realm="my-realm",
+            client_id="my-app",
+        )
+    )],
+)
 ```
 
-Python 3.12+ is required (see [.python-version](.python-version)). uv will use it automatically.
+Any route that declares `current_user: KeycloakUser` automatically requires a valid Bearer token.
 
-## Usage
+## Guards
 
-```bash
-python -m litestar_keycloak
+Restrict access by roles or scopes:
+
+```python
+from litestar import get
+from litestar_keycloak import require_roles, require_scopes
+
+@get("/admin", guards=[require_roles("admin")])
+async def admin_panel() -> dict:
+    return {"msg": "welcome, admin"}
+
+@get("/reports", guards=[require_scopes("reports:read")])
+async def reports() -> dict:
+    return {"msg": "here are your reports"}
 ```
 
-## Development
+## Configuration
 
-1. Install dependencies (including dev): `uv sync`
-2. Install pre-commit hooks so checks run on commit: `pre-commit install`
-3. Run checks manually:
-   - `uv run ruff check .`
-   - `uv run ruff format --check .`
-   - `uv run mypy src/`
-   - `uv run pytest`
-4. Serve docs locally: `uv run mkdocs serve`
-5. Add dependencies: `uv add <pkg>` or `uv add --group dev <pkg>`
+```python
+KeycloakConfig(
+    server_url="https://keycloak.example.com",
+    realm="my-realm",
+    client_id="my-app",
+    client_secret="secret",            # confidential clients
+    token_location=TokenLocation.HEADER,  # HEADER (default) or COOKIE
+    jwks_cache_ttl=3600,               # JWKS cache lifetime in seconds
+    algorithms=("RS256",),             # JWT signing algorithms
+    include_routes=False,              # mount /auth/login, /callback, /logout
+)
+```
 
-To validate the whole repo: `pre-commit run --all-files`
+When `include_routes=True`, the plugin mounts:
 
-## Documentation
+| Endpoint             | Description                        |
+| -------------------- | ---------------------------------- |
+| `GET /auth/login`    | Redirect to Keycloak authorize     |
+| `GET /auth/callback` | Handle authorization code exchange |
+| `POST /auth/logout`  | End session (Keycloak + local)     |
+| `POST /auth/refresh` | Refresh access token               |
 
-API documentation is built with [MkDocs](https://www.mkdocs.org/) and [mkdocstrings](https://mkdocstrings.github.io/), and deployed to **GitHub Pages** on every push to `main`.
+## Testing
 
-- **Local:** `uv run mkdocs serve`
-- **Online:** After enabling Pages, docs will be at `https://<owner>.github.io/<repo>/`
+### Unit tests (no Keycloak required)
 
-To enable: In the repo **Settings → Pages**, set **Source** to **GitHub Actions** so Pages is served from the workflow.
+Test utilities live in `tests/conftest.py`: `create_test_token()` and `MockKeycloakPlugin()`. Use them in your tests (e.g. when running pytest from this repo, or import from conftest):
 
-## Releasing
+```python
+from tests.conftest import create_test_token, MockKeycloakPlugin
 
-Releases are published to **PyPI** automatically when you create a **GitHub Release**.
+# Mint a fake JWT with arbitrary claims
+token = create_test_token(sub="user-1", realm_roles=["admin"])
 
-1. Configure **trusted publishing** for this repo on PyPI: go to your project on [pypi.org](https://pypi.org) → **Publishing** → **Add a new pending publisher**, and add the GitHub repo with workflow name `Publish to PyPI` and the appropriate ref (e.g. `release` for tags).
-2. Create a new release (e.g. tag `v0.1.0`) and publish it; the [publish workflow](.github/workflows/publish.yml) will build and upload the package via OIDC (no API token needed).
+# Use MockKeycloakPlugin to skip real JWKS validation
+app = Litestar(
+    route_handlers=[...],
+    plugins=[MockKeycloakPlugin()],
+)
+```
+
+### Integration tests (real Keycloak via testcontainers)
+
+```python
+from testcontainers.keycloak import KeycloakContainer
+
+kc = (
+    KeycloakContainer("quay.io/keycloak/keycloak:26.0")
+    .with_command("start-dev --import-realm")
+    .with_volume_mapping(
+        "tests/fixtures/realm-export.json",
+        "/opt/keycloak/data/import/realm-export.json",
+        "ro",
+    )
+)
+kc.start()
+```
+
+See `tests/fixtures/realm-export.json` for a pre-configured realm with test users and roles.
+
+## Dependencies
+
+| Package          | Purpose         |
+| ---------------- | --------------- |
+| `litestar` ≥ 2.0 | Peer dependency |
+| `PyJWT[crypto]`  | JWT validation  |
+
+No other runtime dependencies.
 
 ## License
 
-See [LICENSE](LICENSE) if present.
+MIT

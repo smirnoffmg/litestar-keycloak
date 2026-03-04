@@ -1,7 +1,23 @@
-"""litestar-keycloak - Add your description here."""
+"""Keycloak authentication plugin for Litestar."""
 
-__version__ = "0.1.0"
+from litestar_keycloak.config import KeycloakConfig, TokenLocation
+from litestar_keycloak.guards import (
+    MatchStrategy,
+    require_client_roles,
+    require_roles,
+    require_scopes,
+)
+from litestar_keycloak.models import KeycloakUser, TokenPayload
+from litestar_keycloak.plugin import KeycloakPlugin
 
-from litestar_keycloak.main import main
-
-__all__ = ["__version__", "main"]
+__all__ = [
+    "KeycloakConfig",
+    "KeycloakPlugin",
+    "KeycloakUser",
+    "MatchStrategy",
+    "TokenLocation",
+    "TokenPayload",
+    "require_client_roles",
+    "require_roles",
+    "require_scopes",
+]
