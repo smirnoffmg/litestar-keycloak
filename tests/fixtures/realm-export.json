@@ -1,0 +1,64 @@
+{
+    "realm": "test-realm",
+    "enabled": true,
+    "clients": [
+        {
+            "clientId": "test-app",
+            "enabled": true,
+            "publicClient": false,
+            "secret": "test-secret",
+            "redirectUris": [
+                "http://localhost:8000/auth/callback"
+            ],
+            "directAccessGrantsEnabled": true,
+            "standardFlowEnabled": true
+        }
+    ],
+    "roles": {
+        "realm": [
+            {
+                "name": "admin"
+            },
+            {
+                "name": "user"
+            }
+        ]
+    },
+    "users": [
+        {
+            "username": "testuser",
+            "enabled": true,
+            "email": "testuser@test.local",
+            "firstName": "Test",
+            "lastName": "User",
+            "credentials": [
+                {
+                    "type": "password",
+                    "value": "testpass",
+                    "temporary": false
+                }
+            ],
+            "realmRoles": [
+                "user"
+            ]
+        },
+        {
+            "username": "testadmin",
+            "enabled": true,
+            "email": "testadmin@test.local",
+            "firstName": "Test",
+            "lastName": "Admin",
+            "credentials": [
+                {
+                    "type": "password",
+                    "value": "testpass",
+                    "temporary": false
+                }
+            ],
+            "realmRoles": [
+                "admin",
+                "user"
+            ]
+        }
+    ]
+}
