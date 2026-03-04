@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "pypi-package-uv-template"
+name = "litestar-keycloak"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
@@ -39,7 +39,7 @@ python_version = "3.12"
 warn_return_any = true
 warn_unused_ignores = true
 disallow_untyped_defs = false
-packages = ["src/pypi_package_uv_template"]
+packages = ["src/litestar_keycloak"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

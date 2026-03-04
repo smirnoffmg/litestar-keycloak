@@ -2,7 +2,7 @@
 
 import pytest
 
-from pypi_package_uv_template import __version__, main
+from litestar_keycloak import __version__, main
 
 
 def test_version() -> None:
@@ -14,4 +14,4 @@ def test_main(capsys: pytest.CaptureFixture[str]) -> None:
     """Check that main prints the expected message."""
     main()
     captured = capsys.readouterr()
-    assert "Hello from pypi-package-uv-template!" in captured.out
+    assert "Hello from litestar-keycloak!" in captured.out
