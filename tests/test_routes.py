@@ -10,7 +10,7 @@ from litestar_keycloak import KeycloakConfig, KeycloakPlugin
 
 
 def _config_with_routes():
-    """Config with auth routes; auth paths excluded so no token required."""
+    """Config with auth routes; effective_excluded_paths auto-includes auth paths."""
     return KeycloakConfig(
         server_url="http://keycloak.example.com",
         realm="test-realm",
@@ -18,9 +18,6 @@ def _config_with_routes():
         include_routes=True,
         redirect_uri="http://localhost:8000/auth/callback",
         auth_prefix="/auth",
-        excluded_paths=frozenset(
-            ["/auth/login", "/auth/callback", "/auth/logout", "/auth/refresh"]
-        ),
     )
 
 

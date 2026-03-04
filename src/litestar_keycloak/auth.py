@@ -56,7 +56,7 @@ def create_auth_middleware(
             The raw token string and parsed payload are also placed on
             ``connection.state`` for the DI providers.
             """
-            if connection.scope["path"] in config.excluded_paths:
+            if connection.scope["path"] in config.effective_excluded_paths:
                 return AuthenticationResult(user=None, auth=None)
 
             raw_token = _extract_token(connection, config)

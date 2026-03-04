@@ -36,10 +36,6 @@ def build_auth_controller(config: KeycloakConfig) -> type[Controller]:
         path = config.auth_prefix
         tags = ["auth"]
 
-        # Exclude these routes from the plugin's own auth middleware
-        # so unauthenticated users can actually log in.
-        opt = {"exclude_from_auth": True}
-
         @get("/login")
         async def login(self, request: Request[Any, Any, Any]) -> Redirect:
             """Redirect the user to Keycloak's authorization endpoint."""

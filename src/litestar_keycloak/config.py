@@ -131,6 +131,19 @@ class KeycloakConfig:
         """Audience for JWT validation — explicit or falls back to ``client_id``."""
         return self.audience if self.audience is not None else self.client_id
 
+    @property
+    def effective_excluded_paths(self) -> frozenset[str]:
+        """Paths that skip auth: excluded_paths plus auth routes when include_routes."""
+        if not self.include_routes:
+            return self.excluded_paths
+        auth_paths = {
+            f"{self.auth_prefix}/login",
+            f"{self.auth_prefix}/callback",
+            f"{self.auth_prefix}/logout",
+            f"{self.auth_prefix}/refresh",
+        }
+        return self.excluded_paths | auth_paths
+
     def __post_init__(self) -> None:
         if self.include_routes and self.redirect_uri is None:
             raise ValueError("redirect_uri is required when include_routes is True")

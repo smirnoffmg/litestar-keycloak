@@ -11,7 +11,7 @@ OIDC/OAuth2 integration using Litestar's native plugin protocol, dependency inje
 - Scope-based access control
 - `KeycloakUser` injection via Litestar DI
 - Optional login/callback/logout route group
-- Zero HTTP dependencies — uses only Python stdlib for HTTP calls
+- Async HTTP via aiohttp for token exchange and JWKS requests
 
 ## Installation
 
@@ -128,12 +128,11 @@ See `tests/fixtures/realm-export.json` for a pre-configured realm with test user
 
 ## Dependencies
 
-| Package          | Purpose         |
-| ---------------- | --------------- |
-| `litestar` ≥ 2.0 | Peer dependency |
-| `PyJWT[crypto]`  | JWT validation  |
-
-No other runtime dependencies.
+| Package             | Purpose                          |
+| ------------------- | -------------------------------- |
+| `litestar[standard]` ≥ 2.0 | Web framework (plugin target)   |
+| `aiohttp`           | Async HTTP for token/JWKS calls  |
+| `PyJWT[crypto]`     | JWT validation                   |
 
 ## License
 
