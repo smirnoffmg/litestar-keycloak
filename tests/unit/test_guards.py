@@ -83,6 +83,22 @@ def test_require_roles_user_not_keycloak_user_raises():
         guard(_connection("not-a-user"), _handler())
 
 
+def test_require_roles_with_superset_of_roles_passes():
+    """User with superset of required roles passes (e.g. admin+user, require admin)."""
+    user = KeycloakUser(sub="u1", realm_roles=frozenset({"admin", "user"}))
+    guard = require_roles("admin")
+    guard(_connection(user), _handler())  # no raise
+
+
+def test_empty_roles_argument_passes_any_user():
+    """require_roles() with no arguments passes for any user (required is empty)."""
+    user = KeycloakUser(sub="u1", realm_roles=frozenset())
+    guard = require_roles()
+    guard(_connection(user), _handler())  # no raise
+    user_with_roles = KeycloakUser(sub="u2", realm_roles=frozenset({"admin"}))
+    guard(_connection(user_with_roles), _handler())  # no raise
+
+
 # --- require_client_roles ---
 
 
@@ -117,6 +133,21 @@ def test_require_client_roles_any_strategy():
     )
     guard = require_client_roles("svc", "read", "write", strategy=MatchStrategy.ANY)
     guard(_connection(user), _handler())  # no raise
+
+
+def test_require_client_roles_all_strategy_missing_one_raises():
+    """require_client_roles with ALL strategy: user missing one of two roles raises."""
+    user = KeycloakUser(
+        sub="u1",
+        client_roles={"my-client": frozenset({"read"})},
+    )
+    guard = require_client_roles(
+        "my-client", "read", "write", strategy=MatchStrategy.ALL
+    )
+    with pytest.raises(InsufficientRoleError) as exc_info:
+        guard(_connection(user), _handler())
+    assert exc_info.value.required == frozenset({"read", "write"})
+    assert exc_info.value.actual == frozenset({"read"})
 
 
 # --- require_scopes ---

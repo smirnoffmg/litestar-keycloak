@@ -22,6 +22,12 @@ repos:
         language: system
         pass_filenames: false
 
+      - id: pytest
+        name: pytest (unit)
+        entry: uv run pytest -m "not integration"
+        language: system
+        pass_filenames: false
+
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
     hooks:

@@ -107,3 +107,9 @@ def admin_token(keycloak_container) -> str:
     result = obtain_token(keycloak_container.get_url(), "testadmin", "testpass")
     logger.debug("Got admin token (expires_in=%s)", result.get("expires_in"))
     return result["access_token"]
+
+
+@pytest.fixture
+def user_token_response(keycloak_container) -> dict[str, Any]:
+    """Full token response (access_token, refresh_token, etc.) for testuser."""
+    return obtain_token(keycloak_container.get_url(), "testuser", "testpass")

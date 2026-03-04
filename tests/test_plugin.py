@@ -1,7 +1,10 @@
 """Tests for KeycloakPlugin registration (middleware, deps, handlers, startup)."""
 
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 from litestar.config.app import AppConfig
+from litestar.di import Provide
 
 from litestar_keycloak import KeycloakConfig, KeycloakPlugin
 from litestar_keycloak.exceptions import (
@@ -30,6 +33,19 @@ def test_plugin_registers_middleware(keycloak_config):
     assert len(app_config.middleware) == 1
     # Middleware is a class (factory), not an instance
     assert app_config.middleware[0] is not None
+
+
+def test_middleware_inserted_at_position_zero(keycloak_config):
+    """Auth middleware is inserted at index 0, before any existing middleware."""
+    other_middleware = MagicMock()
+    app_config = AppConfig()
+    app_config.middleware = [other_middleware]
+    plugin = KeycloakPlugin(keycloak_config)
+    plugin.on_app_init(app_config)
+    assert len(app_config.middleware) == 2
+    assert app_config.middleware[1] is other_middleware
+    # Keycloak auth middleware is at 0
+    assert app_config.middleware[0] is not other_middleware
 
 
 def test_plugin_registers_exception_handlers(keycloak_config):
@@ -85,3 +101,39 @@ def test_plugin_without_include_routes_adds_no_routes(keycloak_config):
     plugin = KeycloakPlugin(keycloak_config)
     plugin.on_app_init(app_config)
     assert app_config.route_handlers == []
+
+
+def test_user_exception_handler_overrides_plugin_default(keycloak_config):
+    """User exception handler for AuthenticationError is preserved (merge order)."""
+    user_handler = MagicMock()
+    app_config = AppConfig()
+    app_config.exception_handlers = {AuthenticationError: user_handler}
+    plugin = KeycloakPlugin(keycloak_config)
+    plugin.on_app_init(app_config)
+    assert app_config.exception_handlers[AuthenticationError] is user_handler
+
+
+async def _dummy_user_provider():
+    return None
+
+
+def test_user_dependency_overrides_plugin_default(keycloak_config):
+    """User-provided dependency for current_user is preserved (merge order)."""
+    user_provide = Provide(_dummy_user_provider)
+    app_config = AppConfig()
+    app_config.dependencies = {"current_user": user_provide}
+    plugin = KeycloakPlugin(keycloak_config)
+    plugin.on_app_init(app_config)
+    assert app_config.dependencies["current_user"] is user_provide
+
+
+async def test_on_startup_calls_jwks_warm(keycloak_config):
+    """The on_startup callback calls _jwks_cache.warm()."""
+    app_config = AppConfig()
+    plugin = KeycloakPlugin(keycloak_config)
+    plugin.on_app_init(app_config)
+    assert len(app_config.on_startup) == 1
+    warm_mock = AsyncMock()
+    plugin._jwks_cache.warm = warm_mock
+    await app_config.on_startup[0]()
+    warm_mock.assert_called_once()

@@ -11,7 +11,16 @@
                 "http://localhost:8000/auth/callback"
             ],
             "directAccessGrantsEnabled": true,
-            "standardFlowEnabled": true
+            "standardFlowEnabled": true,
+            "defaultClientScopes": ["openid", "profile", "email", "roles"],
+            "optionalClientScopes": ["reports"]
+        },
+        {
+            "clientId": "test-service",
+            "enabled": true,
+            "publicClient": false,
+            "secret": "service-secret",
+            "serviceAccountsEnabled": true
         }
     ],
     "roles": {
@@ -22,7 +31,13 @@
             {
                 "name": "user"
             }
-        ]
+        ],
+        "client": {
+            "test-service": [
+                {"name": "read"},
+                {"name": "write"}
+            ]
+        }
     },
     "users": [
         {
@@ -59,6 +74,18 @@
                 "admin",
                 "user"
             ]
+        },
+        {
+            "username": "testnorolesuser",
+            "enabled": true,
+            "credentials": [
+                {
+                    "type": "password",
+                    "value": "testpass",
+                    "temporary": false
+                }
+            ],
+            "realmRoles": []
         }
     ]
 }

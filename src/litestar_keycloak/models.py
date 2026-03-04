@@ -110,6 +110,10 @@ class TokenPayload:
         normalized = dict(claims)
         if not normalized.get("aud"):
             normalized["aud"] = normalized.get("azp") or ""
+        # Some OIDC providers omit "sub" from access tokens;
+        # falling back to preferred_username
+        if "sub" not in normalized or normalized.get("sub") is None:
+            normalized["sub"] = normalized.get("preferred_username") or ""
         known_fields = {f.name for f in cls.__dataclass_fields__.values()} - {"extra"}
         known = {k: v for k, v in normalized.items() if k in known_fields}
         extra = {k: v for k, v in normalized.items() if k not in known_fields}

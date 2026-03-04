@@ -29,3 +29,22 @@ def test_protected_route_with_valid_token(keycloak_config, user_token):
     data = resp.json()
     assert "sub" in data
     assert "roles" in data
+
+
+@pytest.mark.integration
+@pytest.mark.timeout(120)
+def test_jwks_warm_on_startup_fetches_real_keys(keycloak_config, user_token):
+    """App startup warms JWKS; first request with valid token succeeds."""
+
+    @get("/me")
+    async def me(current_user: KeycloakUser) -> dict:
+        return {"sub": current_user.sub, "roles": list(current_user.realm_roles)}
+
+    app = Litestar(
+        route_handlers=[me],
+        plugins=[KeycloakPlugin(keycloak_config)],
+    )
+    with TestClient(app) as client:
+        resp = client.get("/me", headers={"Authorization": f"Bearer {user_token}"})
+    assert resp.status_code == 200
+    assert "sub" in resp.json()

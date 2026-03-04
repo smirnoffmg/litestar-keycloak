@@ -11,7 +11,7 @@ from litestar_keycloak.auth import (
     create_auth_middleware,
 )
 from litestar_keycloak.config import KeycloakConfig, TokenLocation
-from litestar_keycloak.exceptions import MissingTokenError
+from litestar_keycloak.exceptions import InvalidIssuerError, MissingTokenError
 from litestar_keycloak.models import KeycloakUser, TokenPayload
 
 
@@ -186,3 +186,87 @@ async def test_cookie_location_missing_cookie_raises():
         exc_info.value
     )
     verifier.verify.assert_not_called()
+
+
+# --- bearer case and whitespace ---
+
+
+async def test_bearer_case_insensitive():
+    """Authorization header accepts Bearer in any case (Bearer, BEARER, bearer)."""
+    config = KeycloakConfig(
+        server_url="http://localhost:8080",
+        realm="test-realm",
+        client_id="test-app",
+    )
+    payload = _token_payload()
+    verifier = AsyncMock()
+    verifier.verify = AsyncMock(return_value=payload)
+    middleware_cls = create_auth_middleware(config, verifier)
+    middleware = middleware_cls(_mock_app())
+    for auth_value in (
+        "Bearer my.jwt.token",
+        "BEARER my.jwt.token",
+        "bearer my.jwt.token",
+    ):
+        conn = _connection(headers={"authorization": auth_value})
+        result = await middleware.authenticate_request(conn)
+        assert result.user is not None
+        assert result.user.sub == "user-1"
+    verifier.verify.assert_called_with("my.jwt.token")
+    assert verifier.verify.call_count == 3
+
+
+async def test_extra_whitespace_in_authorization_header():
+    """Extra whitespace between Bearer and token is normalized; token extracted."""
+    config = KeycloakConfig(
+        server_url="http://localhost:8080",
+        realm="test-realm",
+        client_id="test-app",
+    )
+    payload = _token_payload()
+    verifier = AsyncMock()
+    verifier.verify = AsyncMock(return_value=payload)
+    middleware_cls = create_auth_middleware(config, verifier)
+    middleware = middleware_cls(_mock_app())
+    conn = _connection(headers={"authorization": "Bearer   my.jwt.token"})
+    result = await middleware.authenticate_request(conn)
+    assert result.user is not None
+    verifier.verify.assert_called_once_with("my.jwt.token")
+
+
+async def test_excluded_path_does_not_set_state_keys():
+    """Excluded path: state not set with TOKEN_STATE_KEY or RAW_TOKEN_STATE_KEY."""
+    config = KeycloakConfig(
+        server_url="http://localhost:8080",
+        realm="test-realm",
+        client_id="test-app",
+        excluded_paths=frozenset({"/health"}),
+    )
+    verifier = AsyncMock()
+    middleware_cls = create_auth_middleware(config, verifier)
+    middleware = middleware_cls(_mock_app())
+    conn = _connection(scope_path="/health")
+    await middleware.authenticate_request(conn)
+    assert TOKEN_STATE_KEY not in conn.state
+    assert RAW_TOKEN_STATE_KEY not in conn.state
+    verifier.verify.assert_not_called()
+
+
+async def test_verifier_exception_propagates_unchanged():
+    """Verifier exception (e.g. InvalidIssuerError) propagates from auth."""
+    config = KeycloakConfig(
+        server_url="http://localhost:8080",
+        realm="test-realm",
+        client_id="test-app",
+    )
+    verifier = AsyncMock()
+    verifier.verify = AsyncMock(
+        side_effect=InvalidIssuerError(expected="https://kc/r", got="https://wrong/r")
+    )
+    middleware_cls = create_auth_middleware(config, verifier)
+    middleware = middleware_cls(_mock_app())
+    conn = _connection(headers={"authorization": "Bearer my.jwt.token"})
+    with pytest.raises(InvalidIssuerError) as exc_info:
+        await middleware.authenticate_request(conn)
+    assert exc_info.value.expected == "https://kc/r"
+    assert exc_info.value.got == "https://wrong/r"
