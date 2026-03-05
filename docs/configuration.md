@@ -71,9 +71,9 @@ The plugin derives all Keycloak URLs from `server_url` and `realm`; you never bu
 
 ## Validation
 
-- `include_routes=True` and `redirect_uri=None` → `ValueError`.
-- `jwks_cache_ttl < 0` → `ValueError`.
-- `http_timeout <= 0` → `ValueError`.
+- `include_routes=True` and `redirect_uri=None` -> `ValueError`.
+- `jwks_cache_ttl < 0` -> `ValueError`.
+- `http_timeout <= 0` -> `ValueError`.
 
 ## Example
 

@@ -133,13 +133,15 @@ class JWKSCache:
 
     async def _fetch_jwks(self) -> dict[str, Any]:
         try:
-            async with aiohttp.ClientSession(timeout=self._http_timeout) as session:
-                async with session.get(
+            async with (
+                aiohttp.ClientSession(timeout=self._http_timeout) as session,
+                session.get(
                     self._jwks_url,
                     headers={"Accept": "application/json"},
-                ) as resp:
-                    resp.raise_for_status()
-                    return cast(dict[str, Any], await resp.json(content_type=None))
+                ) as resp,
+            ):
+                resp.raise_for_status()
+                return cast("dict[str, Any]", await resp.json(content_type=None))
         except (aiohttp.ClientError, OSError) as exc:
             raise JWKSFetchError(
                 f"Failed to fetch JWKS from {self._jwks_url}: {exc}"

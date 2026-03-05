@@ -64,15 +64,17 @@ async def test_get_key_refreshes_on_ttl_expiry():
     cache = JWKSCache("http://example.com/jwks", ttl=1, http_timeout=10)
     jwks_data = _jwks_response("kid-1")
     # Patch time.monotonic so _is_expired is controlled.
-    with patch.object(
-        cache, "_fetch_jwks", new_callable=AsyncMock, return_value=jwks_data
-    ) as fetch_mock:
-        with patch(
+    with (
+        patch.object(
+            cache, "_fetch_jwks", new_callable=AsyncMock, return_value=jwks_data
+        ) as fetch_mock,
+        patch(
             "litestar_keycloak.token.time.monotonic",
             side_effect=[100, 101, 102, 103, 104, 105, 106, 107],
-        ):
-            await cache.get_key("kid-1")
-            await cache.get_key("kid-1")
+        ),
+    ):
+        await cache.get_key("kid-1")
+        await cache.get_key("kid-1")
     assert fetch_mock.call_count == 2
 
 
@@ -93,11 +95,13 @@ async def test_get_key_raises_after_refresh_if_kid_still_missing():
     """If refresh returns JWKS without requested kid, get_key raises JWKSFetchError."""
     cache = JWKSCache("http://example.com/jwks", ttl=3600, http_timeout=10)
     jwks_data = _jwks_response("other-kid")
-    with patch.object(
-        cache, "_fetch_jwks", new_callable=AsyncMock, return_value=jwks_data
+    with (
+        patch.object(
+            cache, "_fetch_jwks", new_callable=AsyncMock, return_value=jwks_data
+        ),
+        pytest.raises(JWKSFetchError, match="missing-kid"),
     ):
-        with pytest.raises(JWKSFetchError, match="missing-kid"):
-            await cache.get_key("missing-kid")
+        await cache.get_key("missing-kid")
 
 
 async def test_concurrent_refreshes_only_fetch_once():
@@ -133,14 +137,16 @@ async def test_ttl_zero_always_refetches():
 async def test_fetch_failure_raises_jwks_fetch_error():
     """When _fetch_jwks raises, get_key raises JWKSFetchError."""
     cache = JWKSCache("http://example.com/jwks", ttl=3600, http_timeout=10)
-    with patch.object(
-        cache,
-        "_fetch_jwks",
-        new_callable=AsyncMock,
-        side_effect=JWKSFetchError("Network error"),
+    with (
+        patch.object(
+            cache,
+            "_fetch_jwks",
+            new_callable=AsyncMock,
+            side_effect=JWKSFetchError("Network error"),
+        ),
+        pytest.raises(JWKSFetchError, match="Network error"),
     ):
-        with pytest.raises(JWKSFetchError, match="Network error"):
-            await cache.get_key("kid-1")
+        await cache.get_key("kid-1")
 
 
 async def test_malformed_jwks_response_skips_bad_keys():

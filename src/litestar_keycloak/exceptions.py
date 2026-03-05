@@ -9,7 +9,7 @@ by the plugin to translate these into proper HTTP 401/403 responses.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from litestar import MediaType, Response
 
@@ -27,7 +27,7 @@ class KeycloakError(Exception):
 
 
 # ---------------------------------------------------------------------------
-# Authentication errors → HTTP 401
+# Authentication errors -> HTTP 401
 # ---------------------------------------------------------------------------
 
 
@@ -70,7 +70,7 @@ class InvalidAudienceError(AuthenticationError):
 
 
 # ---------------------------------------------------------------------------
-# Authorization errors → HTTP 403
+# Authorization errors -> HTTP 403
 # ---------------------------------------------------------------------------
 
 
@@ -99,7 +99,7 @@ class InsufficientScopeError(AuthorizationError):
 
 
 # ---------------------------------------------------------------------------
-# Infrastructure errors → HTTP 502
+# Infrastructure errors -> HTTP 502
 # ---------------------------------------------------------------------------
 
 
@@ -129,19 +129,19 @@ def _error_response(status_code: int, detail: str) -> Response[dict[str, str]]:
 
 
 def _handle_authentication_error(
-    _: Request, exc: AuthenticationError
+    _: Request[Any, Any, Any], exc: AuthenticationError
 ) -> Response[dict[str, str]]:
     return _error_response(401, str(exc))
 
 
 def _handle_authorization_error(
-    _: Request, exc: AuthorizationError
+    _: Request[Any, Any, Any], exc: AuthorizationError
 ) -> Response[dict[str, str]]:
     return _error_response(403, str(exc))
 
 
 def _handle_backend_error(
-    _: Request, exc: KeycloakBackendError
+    _: Request[Any, Any, Any], exc: KeycloakBackendError
 ) -> Response[dict[str, str]]:
     return _error_response(502, str(exc))
 

@@ -1,4 +1,3 @@
-# Run all checks and unit tests (use after each step / before commit)
 .PHONY: check test test-unit test-integration test-examples
 
 check:
@@ -7,7 +6,6 @@ check:
 	uv run mypy src/
 	uv run pytest -m "not integration"
 
-# Test targets (unit = default addopts exclude integration; integration = Keycloak container)
 test-unit:
 	uv run pytest
 
@@ -16,6 +14,5 @@ test-integration:
 
 test: test-unit test-integration
 
-# Examples smoke test: run ./examples/test.sh (Keycloak and example app must be running)
 test-examples:
 	./examples/test.sh

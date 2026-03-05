@@ -112,14 +112,16 @@ async def _token_request(
     """POST to Keycloak's token endpoint and return the JSON response."""
     timeout = aiohttp.ClientTimeout(total=config.http_timeout)
 
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        async with session.post(
+    async with (
+        aiohttp.ClientSession(timeout=timeout) as session,
+        session.post(
             config.token_url,
             data=form_data,
             headers={"Content-Type": "application/x-www-form-urlencoded"},
-        ) as resp:
-            resp.raise_for_status()
-            return cast(dict[str, Any], await resp.json(content_type=None))
+        ) as resp,
+    ):
+        resp.raise_for_status()
+        return cast("dict[str, Any]", await resp.json(content_type=None))
 
 
 async def _exchange_code(config: KeycloakConfig, code: str) -> dict[str, Any]:
@@ -153,8 +155,9 @@ async def _keycloak_logout(config: KeycloakConfig, refresh_token: str) -> None:
     """Notify Keycloak's end-session endpoint to invalidate tokens."""
     timeout = aiohttp.ClientTimeout(total=config.http_timeout)
 
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        async with session.post(
+    async with (
+        aiohttp.ClientSession(timeout=timeout) as session,
+        session.post(
             config.logout_url,
             data={
                 "client_id": config.client_id,
@@ -162,7 +165,8 @@ async def _keycloak_logout(config: KeycloakConfig, refresh_token: str) -> None:
                 "refresh_token": refresh_token,
             },
             headers={"Content-Type": "application/x-www-form-urlencoded"},
-        ) as _:
-            # Keycloak returns 204 on success; ignore errors on logout
-            # since we clear the local session regardless.
-            pass
+        ) as _,
+    ):
+        # Keycloak returns 204 on success; ignore errors on logout
+        # since we clear the local session regardless.
+        pass

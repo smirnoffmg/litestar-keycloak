@@ -70,8 +70,9 @@ async def get_service_token() -> str:
         "/protocol/openid-connect/token"
     )
     timeout = aiohttp.ClientTimeout(total=10)
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        async with session.post(
+    async with (
+        aiohttp.ClientSession(timeout=timeout) as session,
+        session.post(
             token_url,
             data={
                 "grant_type": "client_credentials",
@@ -79,10 +80,11 @@ async def get_service_token() -> str:
                 "client_secret": KEYCLOAK_SERVICE_CLIENT_SECRET,
             },
             headers={"Content-Type": "application/x-www-form-urlencoded"},
-        ) as resp:
-            resp.raise_for_status()
-            data: dict[str, Any] = await resp.json()
-            return data["access_token"]
+        ) as resp,
+    ):
+        resp.raise_for_status()
+        data: dict[str, Any] = await resp.json()
+        return data["access_token"]
 
 
 # ---------------------------------------------------------------------------
@@ -162,13 +164,15 @@ async def service_call_backend() -> dict[str, Any]:
     token = await get_service_token()
     url = f"{BACKEND_BASE_URL.rstrip('/')}/internal/backend"
     timeout = aiohttp.ClientTimeout(total=10)
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        async with session.get(
+    async with (
+        aiohttp.ClientSession(timeout=timeout) as session,
+        session.get(
             url,
             headers={"Authorization": f"Bearer {token}"},
-        ) as resp:
-            resp.raise_for_status()
-            return await resp.json()
+        ) as resp,
+    ):
+        resp.raise_for_status()
+        return await resp.json()
 
 
 # ---------------------------------------------------------------------------
@@ -183,13 +187,15 @@ async def user_forward(
     """
     url = f"{BACKEND_BASE_URL.rstrip('/')}/internal/backend"
     timeout = aiohttp.ClientTimeout(total=10)
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        async with session.get(
+    async with (
+        aiohttp.ClientSession(timeout=timeout) as session,
+        session.get(
             url,
             headers={"Authorization": f"Bearer {raw_token}"},
-        ) as resp:
-            resp.raise_for_status()
-            return await resp.json()
+        ) as resp,
+    ):
+        resp.raise_for_status()
+        return await resp.json()
 
 
 # ---------------------------------------------------------------------------

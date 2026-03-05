@@ -8,13 +8,15 @@ Each provider reads from the connection state populated by the auth backend.
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
-from litestar.connection import Request
 from litestar.di import Provide
 
 from litestar_keycloak.auth import RAW_TOKEN_STATE_KEY, TOKEN_STATE_KEY
-from litestar_keycloak.models import KeycloakUser, TokenPayload
+from litestar_keycloak.models import KeycloakUser, TokenPayload  # noqa: TC001
+
+if TYPE_CHECKING:
+    from litestar.connection import Request
 
 
 async def _provide_current_user(request: Request[Any, Any, Any]) -> KeycloakUser:
@@ -23,7 +25,7 @@ async def _provide_current_user(request: Request[Any, Any, Any]) -> KeycloakUser
     Reads from ``request.user`` which is set by
     ``AuthenticationResult`` in the auth middleware.
     """
-    return cast(KeycloakUser, request.user)
+    return cast("KeycloakUser", request.user)
 
 
 async def _provide_token_payload(request: Request[Any, Any, Any]) -> TokenPayload:
@@ -32,7 +34,7 @@ async def _provide_token_payload(request: Request[Any, Any, Any]) -> TokenPayloa
     Reads from ``request.state`` where the auth middleware stashes
     the validated payload.
     """
-    return cast(TokenPayload, request.state[TOKEN_STATE_KEY])
+    return cast("TokenPayload", request.state[TOKEN_STATE_KEY])
 
 
 async def _provide_raw_token(request: Request[Any, Any, Any]) -> str:
@@ -40,7 +42,7 @@ async def _provide_raw_token(request: Request[Any, Any, Any]) -> str:
 
     Useful for forwarding the token to downstream services.
     """
-    return cast(str, request.state[RAW_TOKEN_STATE_KEY])
+    return cast("str", request.state[RAW_TOKEN_STATE_KEY])
 
 
 def build_dependencies() -> dict[str, Provide]:

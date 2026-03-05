@@ -61,7 +61,7 @@ class KeycloakPlugin(InitPluginProtocol):
 
         Registers:
         - Authentication middleware (bearer token extraction + validation)
-        - Exception handlers (``KeycloakError`` hierarchy → HTTP responses)
+        - Exception handlers (``KeycloakError`` hierarchy -> HTTP responses)
         - DI providers (``current_user``, ``token_payload``, ``raw_token``)
         - OIDC routes (when ``include_routes`` is ``True``)
         - Lifespan handler to warm the JWKS cache on startup
@@ -72,7 +72,7 @@ class KeycloakPlugin(InitPluginProtocol):
 
         # -- exception handlers --------------------------------------------
         app_config.exception_handlers = cast(
-            Any,
+            "Any",
             {
                 **exception_handlers,
                 **app_config.exception_handlers,

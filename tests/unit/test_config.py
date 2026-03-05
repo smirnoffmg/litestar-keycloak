@@ -74,7 +74,7 @@ def test_frozen_config_rejects_mutation():
     with pytest.raises((AttributeError, Exception)):
         config.server_url = "https://other.com"  # type: ignore[misc]
     with pytest.raises((AttributeError, Exception)):
-        setattr(config, "realm", "other")  # type: ignore[misc]
+        config.realm = "other"  # type: ignore[misc]
 
 
 # --- Derived URLs ---

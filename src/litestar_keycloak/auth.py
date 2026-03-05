@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from litestar.connection import ASGIConnection
 from litestar.middleware import AbstractAuthenticationMiddleware, AuthenticationResult
 
 from litestar_keycloak.config import TokenLocation
@@ -19,6 +18,8 @@ from litestar_keycloak.exceptions import MissingTokenError
 from litestar_keycloak.models import KeycloakUser
 
 if TYPE_CHECKING:
+    from litestar.connection import ASGIConnection
+
     from litestar_keycloak.config import KeycloakConfig
     from litestar_keycloak.token import TokenVerifier
 

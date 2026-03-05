@@ -10,14 +10,16 @@ claims are missing.  Supports both ALL (default) and ANY match semantics.
 from __future__ import annotations
 
 import enum
-from collections.abc import Callable
-from typing import Any
-
-from litestar.connection import ASGIConnection
-from litestar.handlers import BaseRouteHandler
+from typing import TYPE_CHECKING, Any
 
 from litestar_keycloak.exceptions import InsufficientRoleError, InsufficientScopeError
 from litestar_keycloak.models import KeycloakUser
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from litestar.connection import ASGIConnection
+    from litestar.handlers import BaseRouteHandler
 
 
 class MatchStrategy(enum.Enum):

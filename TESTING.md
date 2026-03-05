@@ -258,7 +258,7 @@ test_app_handles_keycloak_restart_gracefully (stop/start container)
 **Routes (real Keycloak):**
 
 ```
-test_full_authorization_code_flow (login redirect → callback → tokens)
+test_full_authorization_code_flow (login redirect -> callback -> tokens)
 test_refresh_with_real_refresh_token
 test_logout_invalidates_refresh_token
 ```
