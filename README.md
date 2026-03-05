@@ -76,8 +76,11 @@ KeycloakConfig(
     jwks_cache_ttl=3600,               # JWKS cache lifetime in seconds
     algorithms=("RS256",),             # JWT signing algorithms
     include_routes=False,              # mount /auth/login, /callback, /logout
+    optional_audiences=frozenset({"my-service"}),  # accept service tokens too
 )
 ```
+
+Full option list: [docs/configuration.md](docs/configuration.md).
 
 When `include_routes=True`, the plugin mounts:
 
@@ -126,13 +129,22 @@ kc.start()
 
 See `tests/fixtures/realm-export.json` for a pre-configured realm with test users and roles.
 
+## Service-to-service
+
+To accept tokens from a service client (e.g. client_credentials), add its client ID to **optional_audiences**. Use the **raw_token** dependency to forward the caller's token to downstream APIs. See [Service-to-service](docs/guides/service-to-service.md).
+
+## Documentation
+
+- **Guides**: [Configuration](docs/configuration.md), [Guards](docs/guides/guards.md), [OIDC routes](docs/guides/oidc-routes.md), [Testing](docs/guides/testing.md). Build the site with `mkdocs build` (or `mkdocs serve`).
+- **Example app** with docker-compose and smoke tests: [examples/](examples/).
+
 ## Dependencies
 
-| Package             | Purpose                          |
-| ------------------- | -------------------------------- |
+| Package                    | Purpose                         |
+| -------------------------- | ------------------------------- |
 | `litestar[standard]` ≥ 2.0 | Web framework (plugin target)   |
-| `aiohttp`           | Async HTTP for token/JWKS calls  |
-| `PyJWT[crypto]`     | JWT validation                   |
+| `aiohttp`                  | Async HTTP for token/JWKS calls |
+| `PyJWT[crypto]`            | JWT validation                  |
 
 ## License
 

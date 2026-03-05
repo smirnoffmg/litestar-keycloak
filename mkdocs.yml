@@ -1,5 +1,5 @@
 site_name: litestar-keycloak
-site_description: Add your description here
+site_description: Keycloak OIDC/OAuth2 authentication plugin for Litestar
 site_url: https://github.com/owner/litestar-keycloak
 
 theme:
@@ -13,7 +13,15 @@ plugins:
           paths: [src]
           options:
             show_source: true
+            show_root_heading: true
+            members: true
 
 nav:
   - Home: index.md
-  - API: api.md
+  - Configuration: configuration.md
+  - Guides:
+    - Guards: guides/guards.md
+    - OIDC routes: guides/oidc-routes.md
+    - Service-to-service: guides/service-to-service.md
+    - Testing: guides/testing.md
+  - API Reference: api.md
