@@ -83,6 +83,9 @@ class KeycloakConfig:
     audience: str | None = None
     """Expected ``aud`` claim.  Defaults to ``client_id`` when ``None``."""
 
+    optional_audiences: frozenset[str] = field(default_factory=frozenset)
+    """Additional audiences to accept (e.g. service client IDs)."""
+
     http_timeout: int = 10
     """Timeout in seconds for outgoing HTTP calls to Keycloak."""
 
@@ -128,8 +131,13 @@ class KeycloakConfig:
 
     @property
     def effective_audience(self) -> str:
-        """Audience for JWT validation — explicit or falls back to ``client_id``."""
+        """Primary audience for JWT validation (explicit or client_id)."""
         return self.audience if self.audience is not None else self.client_id
+
+    @property
+    def accepted_audiences(self) -> frozenset[str]:
+        """All audiences accepted for JWT validation (primary + optional_audiences)."""
+        return frozenset({self.effective_audience}) | self.optional_audiences
 
     @property
     def effective_excluded_paths(self) -> frozenset[str]:

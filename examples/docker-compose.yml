@@ -1,0 +1,43 @@
+# Keycloak + example Litestar app.
+# From repo root: docker compose -f examples/docker-compose.yml up --build
+#
+# App uses host network so it can reach Keycloak at localhost:8080 (issuer in
+# tokens matches). Access: http://localhost:8000 (app), http://localhost:8080 (Keycloak).
+
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    command: start-dev --import-realm
+    environment:
+      KC_HEALTH_ENABLED: "true"
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+    volumes:
+      - ../tests/fixtures/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "exec 3<>/dev/tcp/localhost/8080 && echo -e 'GET /realms/test-realm/.well-known/openid-configuration HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 && cat <&3 | grep -q '200' || exit 1",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+
+  app:
+    build:
+      context: ..
+      dockerfile: examples/Dockerfile
+    environment:
+      KEYCLOAK_SERVER_URL: http://localhost:8080
+      REDIRECT_URI: http://localhost:8000/auth/callback
+      KEYCLOAK_REALM: test-realm
+      KEYCLOAK_CLIENT_ID: test-app
+      KEYCLOAK_CLIENT_SECRET: test-secret
+    network_mode: host
+    depends_on:
+      keycloak:
+        condition: service_healthy

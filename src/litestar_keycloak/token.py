@@ -214,13 +214,19 @@ class TokenVerifier:
         if actual_iss != expected_iss:
             raise InvalidIssuerError(expected=expected_iss, got=actual_iss)
 
-        expected_aud = self._config.effective_audience
+        accepted = self._config.accepted_audiences
         actual_aud = claims.get("aud", "")
-        # Keycloak may omit aud; accept azp (authorized party) when aud is missing
-        if not actual_aud:
-            actual_aud = claims.get("azp", "")
+        azp = claims.get("azp", "")
+        # Keycloak: user tokens often have aud=client_id;
+        # service tokens may have aud="account"
+        # Accept if aud (or list of auds) intersects accepted, or azp is in accepted
         if isinstance(actual_aud, list):
-            if expected_aud not in actual_aud:
-                raise InvalidAudienceError(expected=expected_aud, got=actual_aud)
-        elif actual_aud != expected_aud:
-            raise InvalidAudienceError(expected=expected_aud, got=actual_aud)
+            aud_ok = bool(set(actual_aud) & accepted)
+        else:
+            if not actual_aud:
+                actual_aud = azp
+            aud_ok = actual_aud in accepted
+        if not aud_ok and azp not in accepted:
+            raise InvalidAudienceError(
+                expected=", ".join(sorted(accepted)), got=actual_aud
+            )
