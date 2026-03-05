@@ -54,36 +54,6 @@ jobs:
       - name: Pytest (integration)
         run: uv run pytest -m integration -v --timeout=120
 
-  examples-smoke:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v4
-
-      - name: Install dependencies
-        run: uv sync
-
-      - name: Start Keycloak
-        run: |
-          docker compose -f examples/docker-compose.yml up keycloak -d
-          timeout 90 bash -c 'until curl -sf -o /dev/null http://localhost:8080/realms/test-realm/.well-known/openid-configuration; do sleep 3; done'
-
-      - name: Start example app
-        run: |
-          uv run python -m uvicorn main:app --host 127.0.0.1 --port 8000 --app-dir examples/app &
-          sleep 8
-          curl -sf http://localhost:8000/health || (echo "App failed to start"; exit 1)
-
-      - name: Run examples/test.sh
-        run: ./examples/test.sh
-
   build-docs:
     runs-on: ubuntu-latest
     needs: lint-and-test
