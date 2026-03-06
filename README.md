@@ -1,5 +1,9 @@
 # litestar-keycloak
 
+[![PyPI version](https://img.shields.io/pypi/v/litestar-keycloak)](https://pypi.org/project/litestar-keycloak/)
+[![CI](https://img.shields.io/github/actions/workflow/status/smirnoffmg/litestar-keycloak/ci.yml?branch=main)](https://github.com/smirnoffmg/litestar-keycloak/actions/workflows/ci.yml)
+[![Downloads](https://img.shields.io/pypi/dm/litestar-keycloak)](https://pypistats.org/packages/litestar-keycloak)
+
 Keycloak authentication plugin for [Litestar](https://litestar.dev/).
 OIDC/OAuth2 integration using Litestar's native plugin protocol, dependency injection, and guard system.
 
