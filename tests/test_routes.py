@@ -1,13 +1,16 @@
 """Tests for OIDC auth routes (login, callback, logout, refresh) with mocked HTTP."""
 
 import urllib.parse
+from typing import Any, cast
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from litestar import Litestar
+from litestar import Litestar, Request, get
+from litestar.middleware.session.server_side import ServerSideSessionConfig
+from litestar.stores.memory import MemoryStore
 from litestar.testing import TestClient
 
-from litestar_keycloak import KeycloakConfig, KeycloakPlugin
+from litestar_keycloak import KeycloakConfig, KeycloakPlugin, TokenLocation
 
 
 def _config_with_routes(**kwargs):
@@ -29,6 +32,12 @@ def app_with_routes():
     config = _config_with_routes()
     with patch("litestar_keycloak.plugin.JWKSCache.warm", new_callable=AsyncMock):
         yield Litestar(plugins=[KeycloakPlugin(config)])
+
+
+@get("/debug/session")
+async def debug_session(request: Request[Any, Any, Any]) -> dict[str, Any]:
+    """Return the current server-side session (test helper)."""
+    return cast("dict[str, Any]", request.session or {})
 
 
 def test_login_redirect_includes_client_id_and_redirect_uri(app_with_routes):
@@ -213,3 +222,240 @@ async def test_callback_returns_full_token_response(mock_exchange):
 
     response = Response(content=result)
     assert response.content == token_data
+
+
+@patch("litestar_keycloak.routes._exchange_code", new_callable=AsyncMock)
+def test_callback_cookie_mode_sets_cookie_and_redirects(
+    mock_exchange,
+):
+    """Cookie mode: callback redirects and sets HttpOnly access token cookie."""
+    mock_exchange.return_value = {
+        "access_token": "at",
+        "refresh_token": "rt",
+        "expires_in": 3600,
+    }
+    config = _config_with_routes(
+        token_location=TokenLocation.COOKIE,
+        cookie_secure=False,
+        post_login_redirect="/post-login",
+        excluded_paths=frozenset({"/debug/session"}),
+    )
+    session_config = ServerSideSessionConfig(store="sessions")
+
+    with patch("litestar_keycloak.plugin.JWKSCache.warm", new_callable=AsyncMock):
+        app = Litestar(
+            plugins=[KeycloakPlugin(config)],
+            route_handlers=[debug_session],
+            middleware=[session_config.middleware],
+            stores={"sessions": MemoryStore()},
+        )
+        with TestClient(app) as client:
+            client.get("/auth/login", follow_redirects=False)
+            state = cast(
+                "dict[str, Any]",
+                client.get("/debug/session").json(),
+            )["oauth_state"]
+
+            resp = client.get(
+                f"/auth/callback?code=valid&state={state}",
+                follow_redirects=False,
+            )
+
+            assert resp.headers.get("location") == config.post_login_redirect
+            assert client.cookies.get(config.cookie_name) == "at"
+
+
+@patch("litestar_keycloak.routes._exchange_code", new_callable=AsyncMock)
+def test_callback_cookie_mode_does_not_leak_refresh_token_in_cookie(
+    mock_exchange,
+):
+    """Cookie mode: access token cookie should contain access token only."""
+    mock_exchange.return_value = {
+        "access_token": "access-only",
+        "refresh_token": "refresh-only",
+        "expires_in": 3600,
+    }
+    config = _config_with_routes(
+        token_location=TokenLocation.COOKIE,
+        cookie_secure=False,
+        post_login_redirect="/post-login",
+        excluded_paths=frozenset({"/debug/session"}),
+    )
+    session_config = ServerSideSessionConfig(store="sessions")
+
+    with patch("litestar_keycloak.plugin.JWKSCache.warm", new_callable=AsyncMock):
+        app = Litestar(
+            plugins=[KeycloakPlugin(config)],
+            route_handlers=[debug_session],
+            middleware=[session_config.middleware],
+            stores={"sessions": MemoryStore()},
+        )
+        with TestClient(app) as client:
+            client.get("/auth/login", follow_redirects=False)
+            state = cast("dict[str, Any]", client.get("/debug/session").json())[
+                "oauth_state"
+            ]
+
+            client.get(
+                f"/auth/callback?code=valid&state={state}",
+                follow_redirects=False,
+            )
+            assert client.cookies.get(config.cookie_name) == "access-only"
+            assert client.cookies.get(config.cookie_name) != "refresh-only"
+
+
+@patch("litestar_keycloak.routes._exchange_code", new_callable=AsyncMock)
+def test_callback_header_mode_returns_json_and_no_access_cookie(mock_exchange):
+    """Header mode: callback returns token JSON; access token cookie not set."""
+    token_data = {
+        "access_token": "at",
+        "refresh_token": "rt",
+        "expires_in": 3600,
+    }
+    mock_exchange.return_value = token_data
+
+    config = _config_with_routes(
+        token_location=TokenLocation.HEADER,
+        excluded_paths=frozenset({"/debug/session"}),
+    )
+    session_config = ServerSideSessionConfig(store="sessions")
+
+    with patch("litestar_keycloak.plugin.JWKSCache.warm", new_callable=AsyncMock):
+        app = Litestar(
+            plugins=[KeycloakPlugin(config)],
+            route_handlers=[debug_session],
+            middleware=[session_config.middleware],
+            stores={"sessions": MemoryStore()},
+        )
+        with TestClient(app) as client:
+            client.get("/auth/login", follow_redirects=False)
+            state = cast("dict[str, Any]", client.get("/debug/session").json())[
+                "oauth_state"
+            ]
+
+            resp = client.get(
+                f"/auth/callback?code=valid&state={state}",
+                follow_redirects=False,
+            )
+            assert resp.status_code == 200
+            assert resp.json() == token_data
+            assert client.cookies.get(config.cookie_name) is None
+
+
+@patch("litestar_keycloak.routes._refresh_token", new_callable=AsyncMock)
+@patch("litestar_keycloak.routes._exchange_code", new_callable=AsyncMock)
+def test_refresh_cookie_mode_reads_refresh_from_session(
+    mock_exchange,
+    mock_refresh,
+):
+    """Cookie mode: refresh reads refresh token from session, ignores body."""
+    mock_exchange.return_value = {
+        "access_token": "at1",
+        "refresh_token": "rt1",
+        "expires_in": 3600,
+    }
+    mock_refresh.side_effect = [
+        {
+            "access_token": "at2",
+            "refresh_token": "rt2",
+            "expires_in": 3600,
+        },
+        {
+            "access_token": "at3",
+            "refresh_token": "rt3",
+            "expires_in": 3600,
+        },
+    ]
+
+    config = _config_with_routes(
+        token_location=TokenLocation.COOKIE,
+        cookie_secure=False,
+        post_login_redirect="/post-login",
+        excluded_paths=frozenset({"/debug/session"}),
+    )
+    session_config = ServerSideSessionConfig(store="sessions")
+
+    with patch("litestar_keycloak.plugin.JWKSCache.warm", new_callable=AsyncMock):
+        app = Litestar(
+            plugins=[KeycloakPlugin(config)],
+            route_handlers=[debug_session],
+            middleware=[session_config.middleware],
+            stores={"sessions": MemoryStore()},
+        )
+        with TestClient(app) as client:
+            client.get("/auth/login", follow_redirects=False)
+            state = cast("dict[str, Any]", client.get("/debug/session").json())[
+                "oauth_state"
+            ]
+
+            client.get(
+                f"/auth/callback?code=valid&state={state}",
+                follow_redirects=False,
+            )
+            assert client.cookies.get(config.cookie_name) == "at1"
+
+            resp1 = client.post("/auth/refresh", json={"refresh_token": "wrong"})
+            assert resp1.status_code in (200, 201)
+            assert resp1.json() == {"status": "refreshed"}
+            assert client.cookies.get(config.cookie_name) == "at2"
+
+            assert len(mock_refresh.call_args_list) == 1
+            assert mock_refresh.call_args_list[0].args[1] == "rt1"
+
+            resp2 = client.post("/auth/refresh", json={"refresh_token": "wrong2"})
+            assert resp2.status_code in (200, 201)
+            assert resp2.json() == {"status": "refreshed"}
+            assert client.cookies.get(config.cookie_name) == "at3"
+
+            assert len(mock_refresh.call_args_list) == 2
+            assert mock_refresh.call_args_list[1].args[1] == "rt2"
+
+
+@patch("litestar_keycloak.routes._keycloak_logout", new_callable=AsyncMock)
+@patch("litestar_keycloak.routes._exchange_code", new_callable=AsyncMock)
+def test_logout_cookie_mode_deletes_cookie(
+    mock_exchange,
+    mock_logout,
+):
+    """Cookie mode: logout deletes access token cookie and clears session."""
+    mock_exchange.return_value = {
+        "access_token": "at",
+        "refresh_token": "rt1",
+        "expires_in": 3600,
+    }
+
+    config = _config_with_routes(
+        token_location=TokenLocation.COOKIE,
+        cookie_secure=False,
+        post_login_redirect="/post-login",
+        excluded_paths=frozenset({"/debug/session"}),
+    )
+    session_config = ServerSideSessionConfig(store="sessions")
+
+    with patch("litestar_keycloak.plugin.JWKSCache.warm", new_callable=AsyncMock):
+        app = Litestar(
+            plugins=[KeycloakPlugin(config)],
+            route_handlers=[debug_session],
+            middleware=[session_config.middleware],
+            stores={"sessions": MemoryStore()},
+        )
+        with TestClient(app) as client:
+            client.get("/auth/login", follow_redirects=False)
+            state = cast("dict[str, Any]", client.get("/debug/session").json())[
+                "oauth_state"
+            ]
+            client.get(
+                f"/auth/callback?code=valid&state={state}",
+                follow_redirects=False,
+            )
+            assert client.cookies.get(config.cookie_name) == "at"
+
+            resp = client.post("/auth/logout", json={"refresh_token": "wrong"})
+            assert resp.status_code in (200, 201)
+            assert resp.json() == {"status": "logged_out"}
+
+            assert client.cookies.get(config.cookie_name) is None
+
+            # Cookie mode should use the session refresh token.
+            assert len(mock_logout.call_args_list) == 1
+            assert mock_logout.call_args_list[0].args[1] == "rt1"

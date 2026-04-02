@@ -25,12 +25,14 @@ All plugin behavior is controlled by **KeycloakConfig**, a frozen dataclass. Onl
 
 ## OIDC routes
 
-| Field            | Default       | Description                                                            |
-| ---------------- | ------------- | ---------------------------------------------------------------------- |
-| `include_routes` | `False`       | If `True`, mount login, callback, logout, refresh under `auth_prefix`. |
-| `redirect_uri`   | `None`        | OAuth2 redirect URI. **Required** when `include_routes=True`.          |
-| `auth_prefix`    | `"/auth"`     | URL prefix for the mounted routes (e.g. `/auth/login`).                |
-| `scopes`         | `("openid",)` | Scopes requested in the authorization code flow.                       |
+| Field                 | Default       | Description                                                                                         |
+| --------------------- | ------------- | --------------------------------------------------------------------------------------------------- |
+| `include_routes`      | `False`       | If `True`, mount login, callback, logout, refresh under `auth_prefix`.                              |
+| `redirect_uri`        | `None`        | OAuth2 redirect URI. **Required** when `include_routes=True`.                                       |
+| `auth_prefix`         | `"/auth"`     | URL prefix for the mounted routes (e.g. `/auth/login`).                                             |
+| `scopes`              | `("openid",)` | Scopes requested in the authorization code flow.                                                    |
+| `post_login_redirect` | `"/"`         | Redirect target after a successful `/auth/callback` when using cookie mode.                         |
+| `cookie_secure`       | `True`        | Whether the access-token cookie is marked `Secure` in cookie mode (set `False` for local HTTP dev). |
 
 ## JWT validation
 

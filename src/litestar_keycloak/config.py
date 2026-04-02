@@ -79,6 +79,18 @@ class KeycloakConfig:
     """OAuth2 redirect URI for the authorization code flow.
     Required when ``include_routes`` is ``True``."""
 
+    post_login_redirect: str = "/"
+    """Where to redirect after a successful ``/auth/callback`` when using cookie mode.
+
+    This is only used by the optional OIDC route group when ``include_routes=True``.
+    """
+
+    cookie_secure: bool = True
+    """Whether to set the ``Secure`` flag for the access-token cookie in cookie mode.
+
+    Set this to ``False`` when running over plain HTTP in local development.
+    """
+
     # -- advanced ----------------------------------------------------------
     audience: str | None = None
     """Expected ``aud`` claim.  Defaults to ``client_id`` when ``None``."""

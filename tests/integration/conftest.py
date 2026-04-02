@@ -12,6 +12,7 @@ For more detail (e.g. wait polling):
 
 import json
 import logging
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -32,7 +33,6 @@ OIDC_READINESS_TIMEOUT = 120
 
 @pytest.fixture(scope="session")
 def keycloak_container():
-    from testcontainers.core.wait_strategies import HttpWaitStrategy
     from testcontainers.keycloak import KeycloakContainer
 
     logger.info(
@@ -44,13 +44,22 @@ def keycloak_container():
     kc.start()
     base_url = kc.get_url()
     logger.info("Container up at %s, waiting for realm OIDC discovery...", base_url)
-    oidc_path = "/realms/test-realm/.well-known/openid-configuration"
-    oidc_strategy = (
-        HttpWaitStrategy(8080, oidc_path)
-        .for_status_code(200)
-        .with_startup_timeout(OIDC_READINESS_TIMEOUT)
-    )
-    oidc_strategy.wait_until_ready(kc)
+    oidc_url = f"{base_url}/realms/test-realm/.well-known/openid-configuration"
+    deadline = time.monotonic() + OIDC_READINESS_TIMEOUT
+    while time.monotonic() < deadline:
+        try:
+            # Use a short timeout per attempt to keep the loop responsive.
+            with urllib.request.urlopen(oidc_url, timeout=2) as resp:
+                if resp.status == 200:
+                    break
+        except Exception as exc:
+            logger.debug("Waiting for Keycloak OIDC discovery: %s", exc)
+        time.sleep(1)
+    else:
+        raise RuntimeError(
+            "Keycloak OIDC discovery not ready after "
+            f"{OIDC_READINESS_TIMEOUT}s: {oidc_url}"
+        )
     logger.info("Keycloak ready, realm test-realm available")
     yield kc
     logger.info("Stopping Keycloak container...")

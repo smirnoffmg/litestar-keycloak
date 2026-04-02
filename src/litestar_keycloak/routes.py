@@ -10,6 +10,7 @@ under a configurable path prefix (default ``/auth``).
 
 from __future__ import annotations
 
+import logging
 import secrets
 import urllib.parse
 from typing import TYPE_CHECKING, Any, cast
@@ -19,10 +20,49 @@ from litestar import Controller, Response, get, post
 from litestar.exceptions import NotAuthorizedException
 from litestar.response import Redirect
 
+from litestar_keycloak.config import TokenLocation
+
 if TYPE_CHECKING:
     from litestar.connection import Request
 
     from litestar_keycloak.config import KeycloakConfig
+
+logger = logging.getLogger(__name__)
+
+REFRESH_TOKEN_SESSION_KEY = "keycloak_refresh_token"
+
+
+def _set_access_token_cookie(
+    response: Response[Any],
+    config: KeycloakConfig,
+    token_data: dict[str, Any],
+) -> None:
+    """Set the access-token cookie from Keycloak's token response."""
+    access_token = token_data.get("access_token")
+    if not isinstance(access_token, str) or not access_token:
+        raise NotAuthorizedException(detail="Missing access_token")
+
+    expires_in = token_data.get("expires_in")
+    max_age: int | None
+    if isinstance(expires_in, int) and expires_in > 0:
+        max_age = expires_in
+    else:
+        max_age = None
+        logger.debug(
+            "Keycloak token response missing/invalid expires_in=%r; "
+            "access token cookie will become a session cookie",
+            expires_in,
+        )
+
+    response.set_cookie(
+        key=config.cookie_name,
+        value=access_token,
+        max_age=max_age,
+        path="/",
+        httponly=True,
+        secure=config.cookie_secure,
+        samesite="lax",
+    )
 
 
 def build_auth_controller(config: KeycloakConfig) -> type[Controller]:
@@ -56,7 +96,7 @@ def build_auth_controller(config: KeycloakConfig) -> type[Controller]:
         @get("/callback")
         async def callback(
             self, request: Request[Any, Any, Any]
-        ) -> Response[dict[str, Any]]:
+        ) -> Response[dict[str, Any]] | Redirect:
             """Exchange the authorization code for tokens."""
             code = request.query_params.get("code")
             state = request.query_params.get("state")
@@ -69,6 +109,19 @@ def build_auth_controller(config: KeycloakConfig) -> type[Controller]:
                 raise NotAuthorizedException(detail="Invalid OAuth state")
 
             token_data = await _exchange_code(config, code)
+            if config.token_location is TokenLocation.COOKIE:
+                # Persist refresh token server-side; browser receives only access token.
+                session = dict(request.session or {})
+                session.pop("oauth_state", None)
+                refresh_token = token_data.get("refresh_token")
+                if isinstance(refresh_token, str) and refresh_token:
+                    session[REFRESH_TOKEN_SESSION_KEY] = refresh_token
+                request.set_session(session)
+
+                redirect = Redirect(config.post_login_redirect)
+                _set_access_token_cookie(redirect, config, token_data)
+                return redirect
+
             return Response(content=token_data)
 
         @post("/logout")
@@ -76,8 +129,22 @@ def build_auth_controller(config: KeycloakConfig) -> type[Controller]:
             self, request: Request[Any, Any, Any]
         ) -> Response[dict[str, str]]:
             """End both the Keycloak and local sessions."""
-            refresh_token = (await request.json()).get("refresh_token", "")
+            if config.token_location is TokenLocation.COOKIE:
+                session = request.session or {}
+                refresh_token = session.get(REFRESH_TOKEN_SESSION_KEY, "")
+                if isinstance(refresh_token, str) and refresh_token:
+                    await _keycloak_logout(config, refresh_token)
 
+                request.clear_session()
+                response = Response(content={"status": "logged_out"})
+                response.delete_cookie(
+                    key=config.cookie_name,
+                    path="/",
+                    domain=None,
+                )
+                return response
+
+            refresh_token = (await request.json()).get("refresh_token", "")
             if refresh_token:
                 await _keycloak_logout(config, refresh_token)
 
@@ -89,6 +156,25 @@ def build_auth_controller(config: KeycloakConfig) -> type[Controller]:
             self, request: Request[Any, Any, Any]
         ) -> Response[dict[str, Any]]:
             """Use a refresh token to obtain new access/refresh tokens."""
+            if config.token_location is TokenLocation.COOKIE:
+                session = request.session or {}
+                refresh_token = session.get(REFRESH_TOKEN_SESSION_KEY, "")
+                if not isinstance(refresh_token, str) or not refresh_token:
+                    raise NotAuthorizedException(detail="Missing refresh_token")
+
+                token_data = await _refresh_token(config, refresh_token)
+
+                response = Response(content={"status": "refreshed"})
+                _set_access_token_cookie(response, config, token_data)
+
+                new_refresh_token = token_data.get("refresh_token")
+                if isinstance(new_refresh_token, str) and new_refresh_token:
+                    session = dict(session)
+                    session[REFRESH_TOKEN_SESSION_KEY] = new_refresh_token
+                    request.set_session(session)
+
+                return response
+
             body = await request.json()
             refresh_token = body.get("refresh_token", "")
 
