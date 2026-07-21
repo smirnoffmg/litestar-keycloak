@@ -34,11 +34,12 @@ All plugin behavior is controlled by **KeycloakConfig**, a frozen dataclass. Onl
 
 ## JWT validation
 
-| Field                | Default       | Description                                                                                                                               |
-| -------------------- | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `audience`           | `None`        | Expected `aud` claim; defaults to `client_id` when `None`.                                                                                |
-| `optional_audiences` | `frozenset()` | Additional audiences to accept (e.g. a service client ID). Tokens with `aud` or `azp` in this set (or the primary audience) are accepted. |
-| `algorithms`         | `("RS256",)`  | Accepted JWT signing algorithms.                                                                                                          |
+| Field                 | Default       | Description                                                                                                                                                                       |
+| --------------------- | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `audience`            | `None`        | Expected `aud` claim; defaults to `client_id` when `None`.                                                                                                                        |
+| `optional_audiences`  | `frozenset()` | Additional audiences to accept (e.g. a service client ID). Tokens with `aud` or `azp` in this set (or the primary audience) are accepted.                                         |
+| `algorithms`          | `("RS256",)`  | Accepted JWT signing algorithms.                                                                                                                                                  |
+| `expected_token_type` | `"Bearer"`    | Required payload `typ` claim. The default rejects Keycloak ID and Refresh tokens presented as access tokens. Set to `None` to disable the check (e.g. providers that omit `typ`). |
 
 ## JWKS and HTTP
 

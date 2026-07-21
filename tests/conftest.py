@@ -63,6 +63,7 @@ def create_test_token(
     exp_offset: int = 3600,
     iss: str = DEFAULT_ISSUER,
     aud: str = DEFAULT_AUDIENCE,
+    typ: str | None = "Bearer",
     headers: dict[str, str] | None = None,
     **extra_claims: Any,
 ) -> str:
@@ -77,6 +78,9 @@ def create_test_token(
         "realm_access": {"roles": realm_roles or ["user"]},
         **extra_claims,
     }
+    # Real Keycloak access tokens carry typ="Bearer"; omit when None.
+    if typ is not None:
+        payload["typ"] = typ
     h = dict(headers) if headers is not None else {}
     if "kid" not in h:
         h["kid"] = DEFAULT_KID

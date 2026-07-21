@@ -168,3 +168,39 @@ async def test_malformed_jwks_response_skips_bad_keys():
     assert key.key_id == "valid-kid"
     with pytest.raises(JWKSFetchError, match="ec-kid"):
         await cache.get_key("ec-kid")
+
+
+async def test_jwks_key_without_kid_is_skipped():
+    """A JWK with no 'kid' is skipped without disturbing valid keys."""
+    cache = JWKSCache("http://example.com/jwks", ttl=3600, http_timeout=10)
+    no_kid = {k: v for k, v in _make_jwk_dict("tmp").items() if k != "kid"}
+    valid_jwk = _make_jwk_dict("valid-kid")
+    jwks_data = {"keys": [no_kid, valid_jwk]}
+    with patch.object(
+        cache, "_fetch_jwks", new_callable=AsyncMock, return_value=jwks_data
+    ):
+        await cache.warm()
+    assert (await cache.get_key("valid-kid")).key_id == "valid-kid"
+
+
+async def test_unparseable_rsa_jwk_is_skipped():
+    """An RSA JWK that PyJWK cannot parse is skipped; valid keys still load."""
+    cache = JWKSCache("http://example.com/jwks", ttl=3600, http_timeout=10)
+    bad_rsa = {"kty": "RSA", "kid": "bad-kid", "n": "!!!not-base64!!!", "e": "AQAB"}
+    valid_jwk = _make_jwk_dict("valid-kid")
+    jwks_data = {"keys": [bad_rsa, valid_jwk]}
+    with patch.object(
+        cache, "_fetch_jwks", new_callable=AsyncMock, return_value=jwks_data
+    ):
+        await cache.warm()
+    assert (await cache.get_key("valid-kid")).key_id == "valid-kid"
+    with pytest.raises(JWKSFetchError, match="bad-kid"):
+        await cache.get_key("bad-kid")
+
+
+async def test_fetch_jwks_network_error_wrapped_as_jwks_fetch_error():
+    """_fetch_jwks wraps a real aiohttp connection error as JWKSFetchError."""
+    # Port 1 is reserved and refuses connections -> aiohttp.ClientError.
+    cache = JWKSCache("http://127.0.0.1:1/jwks", ttl=3600, http_timeout=2)
+    with pytest.raises(JWKSFetchError, match="Failed to fetch JWKS"):
+        await cache._fetch_jwks()

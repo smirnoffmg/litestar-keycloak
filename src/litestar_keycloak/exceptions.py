@@ -69,6 +69,15 @@ class InvalidAudienceError(AuthenticationError):
         super().__init__(f"Expected audience {expected!r}, got {got!r}")
 
 
+class InvalidTokenTypeError(AuthenticationError):
+    """Token payload ``typ`` is not the expected access-token type."""
+
+    def __init__(self, expected: str, got: str) -> None:
+        self.expected = expected
+        self.got = got
+        super().__init__(f"Expected token type {expected!r}, got {got!r}")
+
+
 # ---------------------------------------------------------------------------
 # Authorization errors -> HTTP 403
 # ---------------------------------------------------------------------------

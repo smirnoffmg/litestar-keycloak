@@ -5,6 +5,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from litestar import Litestar
+from litestar.middleware.session.server_side import ServerSideSessionConfig
+from litestar.stores.memory import MemoryStore
 from litestar.testing import TestClient
 
 from litestar_keycloak import KeycloakConfig, KeycloakPlugin
@@ -29,6 +31,62 @@ def app_with_routes():
     config = _config_with_routes()
     with patch("litestar_keycloak.plugin.JWKSCache.warm", new_callable=AsyncMock):
         yield Litestar(plugins=[KeycloakPlugin(config)])
+
+
+@pytest.fixture
+def app_with_session():
+    """App with auth routes AND session middleware, so callback/logout state works."""
+    config = _config_with_routes()
+    session_config = ServerSideSessionConfig()
+    with patch("litestar_keycloak.plugin.JWKSCache.warm", new_callable=AsyncMock):
+        yield Litestar(
+            plugins=[KeycloakPlugin(config)],
+            middleware=[session_config.middleware],
+            stores={"sessions": MemoryStore()},
+        )
+
+
+def _login_state(client) -> str:
+    """Drive /auth/login and return the state it stored in the session."""
+    resp = client.get("/auth/login", follow_redirects=False)
+    query = urllib.parse.urlparse(resp.headers["location"]).query
+    return urllib.parse.parse_qs(query)["state"][0]
+
+
+# --- Fakes for aiohttp so the token/logout HTTP helpers run without a server ---
+
+
+class _FakeResp:
+    def __init__(self, data: dict) -> None:
+        self._data = data
+
+    async def __aenter__(self) -> "_FakeResp":
+        return self
+
+    async def __aexit__(self, *_exc: object) -> bool:
+        return False
+
+    def raise_for_status(self) -> None:
+        pass
+
+    async def json(self, content_type: object = None) -> dict:
+        return self._data
+
+
+class _FakeSession:
+    def __init__(self, data: dict) -> None:
+        self._data = data
+        self.calls: list[tuple] = []
+
+    async def __aenter__(self) -> "_FakeSession":
+        return self
+
+    async def __aexit__(self, *_exc: object) -> bool:
+        return False
+
+    def post(self, url, data=None, headers=None) -> _FakeResp:
+        self.calls.append((url, data, headers))
+        return _FakeResp(self._data)
 
 
 def test_login_redirect_includes_client_id_and_redirect_uri(app_with_routes):
@@ -213,3 +271,91 @@ async def test_callback_returns_full_token_response(mock_exchange):
 
     response = Response(content=result)
     assert response.content == token_data
+
+
+# --- callback state validation (with real session middleware) ---
+
+
+def test_callback_valid_state_returns_tokens(app_with_session):
+    """Callback with a state matching the session exchanges the code and returns it."""
+    with (
+        patch(
+            "litestar_keycloak.routes._exchange_code",
+            new_callable=AsyncMock,
+            return_value={"access_token": "at", "refresh_token": "rt"},
+        ) as mock_exchange,
+        TestClient(app_with_session) as client,
+    ):
+        state = _login_state(client)
+        resp = client.get(f"/auth/callback?code=the-code&state={state}")
+    assert resp.status_code == 200
+    assert resp.json()["access_token"] == "at"
+    mock_exchange.assert_called_once()
+    assert mock_exchange.call_args[0][1] == "the-code"
+
+
+def test_callback_wrong_state_returns_401(app_with_session):
+    """Callback with a state that doesn't match the session is rejected with 401."""
+    with TestClient(app_with_session) as client:
+        _login_state(client)  # establish a session with a different state
+        resp = client.get("/auth/callback?code=the-code&state=not-the-saved-state")
+    assert resp.status_code == 401
+
+
+def test_logout_without_refresh_token_skips_keycloak(app_with_session):
+    """Logout with no refresh_token clears the session without calling Keycloak."""
+    with (
+        patch(
+            "litestar_keycloak.routes._keycloak_logout", new_callable=AsyncMock
+        ) as mock_logout,
+        TestClient(app_with_session) as client,
+    ):
+        resp = client.post("/auth/logout", json={})
+    assert resp.status_code in (200, 201)
+    assert resp.json()["status"] == "logged_out"
+    mock_logout.assert_not_called()
+
+
+# --- aiohttp token/logout helpers (exercised via fake session) ---
+
+
+async def test_token_request_posts_to_token_url_and_returns_json():
+    """_token_request POSTs form data to the token endpoint and returns parsed JSON."""
+    from litestar_keycloak.routes import _token_request
+
+    config = _config_with_routes()
+    fake = _FakeSession({"access_token": "at", "expires_in": 3600})
+    with patch("aiohttp.ClientSession", return_value=fake):
+        result = await _token_request(config, {"grant_type": "refresh_token"})
+    assert result == {"access_token": "at", "expires_in": 3600}
+    url, data, _headers = fake.calls[0]
+    assert url == config.token_url
+    assert data == {"grant_type": "refresh_token"}
+
+
+async def test_exchange_code_uses_authorization_code_grant():
+    """_exchange_code sends grant_type=authorization_code with the code and redirect."""
+    from litestar_keycloak.routes import _exchange_code
+
+    config = _config_with_routes()
+    fake = _FakeSession({"access_token": "at"})
+    with patch("aiohttp.ClientSession", return_value=fake):
+        result = await _exchange_code(config, "the-auth-code")
+    assert result == {"access_token": "at"}
+    _url, data, _headers = fake.calls[0]
+    assert data["grant_type"] == "authorization_code"
+    assert data["code"] == "the-auth-code"
+    assert data["redirect_uri"] == config.redirect_uri
+
+
+async def test_keycloak_logout_posts_to_logout_url():
+    """_keycloak_logout POSTs the refresh token to the end-session endpoint."""
+    from litestar_keycloak.routes import _keycloak_logout
+
+    config = _config_with_routes()
+    fake = _FakeSession({})
+    with patch("aiohttp.ClientSession", return_value=fake):
+        await _keycloak_logout(config, "rt-123")
+    url, data, _headers = fake.calls[0]
+    assert url == config.logout_url
+    assert data["refresh_token"] == "rt-123"

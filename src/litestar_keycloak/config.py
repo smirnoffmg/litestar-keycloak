@@ -86,6 +86,11 @@ class KeycloakConfig:
     optional_audiences: frozenset[str] = field(default_factory=frozenset)
     """Additional audiences to accept (e.g. service client IDs)."""
 
+    expected_token_type: str | None = "Bearer"
+    """Required payload ``typ`` claim.  ``"Bearer"`` (default) rejects Keycloak
+    ID and Refresh tokens presented as access tokens.  Set to ``None`` to disable
+    the check (e.g. non-Keycloak OIDC providers that omit ``typ``)."""
+
     http_timeout: int = 10
     """Timeout in seconds for outgoing HTTP calls to Keycloak."""
 

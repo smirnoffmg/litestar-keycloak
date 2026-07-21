@@ -88,6 +88,7 @@ def make_token(rsa_keypair):
         sub: str = "test-user-id",
         realm_roles: list[str] | None = None,
         exp_offset: int = 3600,
+        typ: str | None = "Bearer",
         headers: dict | None = None,
         **extra_claims,
     ) -> str:
@@ -101,6 +102,9 @@ def make_token(rsa_keypair):
             "realm_access": {"roles": realm_roles or ["user"]},
             **extra_claims,
         }
+        # Real Keycloak access tokens carry typ="Bearer"; omit when None.
+        if typ is not None:
+            payload["typ"] = typ
         h = headers if headers is not None else {"kid": "test-kid"}
         return jwt.encode(payload, private_key, algorithm="RS256", headers=h)
 

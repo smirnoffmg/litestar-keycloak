@@ -1,15 +1,19 @@
 """Unit tests for TokenVerifier and token validation."""
 
+import dataclasses
+
 import pytest
 
 from litestar_keycloak.exceptions import (
     InvalidAudienceError,
     InvalidIssuerError,
+    InvalidTokenTypeError,
     JWKSFetchError,
     TokenDecodeError,
     TokenExpiredError,
 )
 from litestar_keycloak.models import TokenPayload
+from litestar_keycloak.token import TokenVerifier
 
 
 async def test_verify_valid_token_returns_token_payload(token_verifier, make_token):
@@ -102,3 +106,48 @@ async def test_verify_extra_claims_land_in_extra(token_verifier, make_token):
     payload = await token_verifier.verify(token)
     assert payload.extra.get("custom_claim") == "value"
     assert payload.extra.get("another") == 42
+
+
+# --- token type (typ) validation ---
+
+
+async def test_verify_bearer_token_accepted(token_verifier, make_token):
+    """Access token with typ='Bearer' is accepted."""
+    token = make_token(sub="user-1", typ="Bearer")
+    payload = await token_verifier.verify(token)
+    assert payload.sub == "user-1"
+    assert payload.typ == "Bearer"
+
+
+async def test_verify_id_token_rejected(token_verifier, make_token):
+    """ID token (typ='ID') is rejected even though aud matches client_id."""
+    token = make_token(typ="ID")
+    with pytest.raises(InvalidTokenTypeError) as exc_info:
+        await token_verifier.verify(token)
+    assert exc_info.value.expected == "Bearer"
+    assert exc_info.value.got == "ID"
+
+
+async def test_verify_refresh_token_rejected(token_verifier, make_token):
+    """Refresh token (typ='Refresh') is rejected as an access token."""
+    token = make_token(typ="Refresh")
+    with pytest.raises(InvalidTokenTypeError):
+        await token_verifier.verify(token)
+
+
+async def test_verify_missing_typ_rejected_by_default(token_verifier, make_token):
+    """Token without a typ claim is rejected under the default 'Bearer'."""
+    token = make_token(typ=None)
+    with pytest.raises(InvalidTokenTypeError):
+        await token_verifier.verify(token)
+
+
+async def test_verify_typ_check_disabled_allows_id_token(
+    keycloak_config, mock_jwks_cache, make_token
+):
+    """Setting expected_token_type=None disables the check (ID token passes)."""
+    config = dataclasses.replace(keycloak_config, expected_token_type=None)
+    verifier = TokenVerifier(config, mock_jwks_cache)
+    token = make_token(sub="user-2", typ="ID")
+    payload = await verifier.verify(token)
+    assert payload.sub == "user-2"

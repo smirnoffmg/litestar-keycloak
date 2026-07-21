@@ -22,6 +22,7 @@ from jwt import PyJWK
 from litestar_keycloak.exceptions import (
     InvalidAudienceError,
     InvalidIssuerError,
+    InvalidTokenTypeError,
     JWKSFetchError,
     TokenDecodeError,
     TokenExpiredError,
@@ -211,6 +212,12 @@ class TokenVerifier:
             raise TokenDecodeError(str(exc)) from exc
 
     def _validate_claims(self, claims: dict[str, Any]) -> None:
+        expected_typ = self._config.expected_token_type
+        if expected_typ is not None:
+            actual_typ = claims.get("typ", "")
+            if actual_typ != expected_typ:
+                raise InvalidTokenTypeError(expected=expected_typ, got=str(actual_typ))
+
         expected_iss = self._config.issuer
         actual_iss = claims.get("iss", "")
         if actual_iss != expected_iss:
