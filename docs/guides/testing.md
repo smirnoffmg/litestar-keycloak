@@ -12,10 +12,10 @@ Builds a JWT signed with a fixed test key. Use it with **MockKeycloakPlugin** so
 from tests.conftest import create_test_token, MockKeycloakPlugin
 from litestar import Litestar, get
 from litestar.testing import TestClient
-from litestar_keycloak import KeycloakUser
+from litestar_keycloak import CurrentUser
 
 @get("/me")
-async def me(current_user: KeycloakUser) -> dict:
+async def me(current_user: CurrentUser) -> dict:
     return {"sub": current_user.sub, "roles": list(current_user.realm_roles)}
 
 app = Litestar(route_handlers=[me], plugins=[MockKeycloakPlugin()])

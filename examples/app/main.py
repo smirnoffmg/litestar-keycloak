@@ -17,11 +17,12 @@ from litestar.middleware.session.server_side import ServerSideSessionConfig
 from litestar.stores.memory import MemoryStore
 
 from litestar_keycloak import (
+    CurrentRawToken,
+    CurrentTokenPayload,
+    CurrentUser,
     KeycloakConfig,
     KeycloakPlugin,
-    KeycloakUser,
     TokenLocation,
-    TokenPayload,
     require_roles,
 )
 
@@ -112,7 +113,7 @@ async def health() -> dict[str, str]:
 
 
 @get("/me")
-async def me(current_user: KeycloakUser) -> dict:
+async def me(current_user: CurrentUser) -> dict:
     """Current user info (requires valid Bearer token)."""
     return {
         "sub": current_user.sub,
@@ -124,7 +125,7 @@ async def me(current_user: KeycloakUser) -> dict:
 
 
 @get("/admin", guards=[require_roles("admin")])
-async def admin_panel(current_user: KeycloakUser) -> dict:
+async def admin_panel(current_user: CurrentUser) -> dict:
     """Admin-only area (guard: realm role 'admin')."""
     return {
         "message": f"Welcome, {current_user.preferred_username or current_user.sub}",
@@ -138,8 +139,8 @@ async def admin_panel(current_user: KeycloakUser) -> dict:
 # ---------------------------------------------------------------------------
 @get("/internal/backend")
 async def internal_backend(
-    current_user: KeycloakUser,
-    token_payload: TokenPayload,
+    current_user: CurrentUser,
+    token_payload: CurrentTokenPayload,
 ) -> dict[str, Any]:
     """Backend: any valid token. In production use require_client_roles."""
     return {
@@ -180,7 +181,7 @@ async def service_call_backend() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 @get("/user/forward")
 async def user_forward(
-    raw_token: str,
+    raw_token: CurrentRawToken,
 ) -> dict[str, Any]:
     """Forward the current user's Bearer token to the internal backend.
     Demonstrates user-context propagation to a downstream service.

@@ -23,10 +23,10 @@ Requires Python 3.12+. Dependencies: `litestar[standard]` ≥ 2.0, `aiohttp`, `P
 
 ```python
 from litestar import Litestar, get
-from litestar_keycloak import KeycloakPlugin, KeycloakConfig, KeycloakUser
+from litestar_keycloak import KeycloakPlugin, KeycloakConfig, CurrentUser
 
 @get("/me")
-async def me(current_user: KeycloakUser) -> dict:
+async def me(current_user: CurrentUser) -> dict:
     return {
         "sub": current_user.sub,
         "username": current_user.preferred_username,
@@ -47,7 +47,7 @@ app = Litestar(
 )
 ```
 
-Any route that declares `current_user: KeycloakUser` (or `token_payload` / `raw_token`) requires a valid Bearer token. Requests without a token or with an invalid token receive `401 Unauthorized`.
+Any route that declares `current_user: CurrentUser` (or `token_payload` / `raw_token`) requires a valid Bearer token. Requests without a token or with an invalid token receive `401 Unauthorized`.
 
 ## Configuration
 
@@ -138,13 +138,19 @@ Use the **raw_token** dependency to forward the caller's token to a downstream A
 
 The plugin registers these dependencies (by parameter name):
 
-| Parameter       | Type           | Description                              |
-| --------------- | -------------- | ---------------------------------------- |
-| `current_user`  | `KeycloakUser` | Identity built from the validated token. |
-| `token_payload` | `TokenPayload` | Decoded JWT claims (OIDC + Keycloak).    |
-| `raw_token`     | `str`          | Raw JWT string (e.g. for forwarding).    |
+| Parameter       | Annotation            | Description                              |
+| --------------- | --------------------- | ---------------------------------------- |
+| `current_user`  | `CurrentUser`         | Identity built from the validated token. |
+| `token_payload` | `CurrentTokenPayload` | Decoded JWT claims (OIDC + Keycloak).    |
+| `raw_token`     | `CurrentRawToken`     | Raw JWT string (e.g. for forwarding).    |
 
 Use them in route handlers; they are only available on authenticated requests.
+
+Injection is by **parameter name**, so the names above are required — the annotation
+alone does not bind a differently named parameter. The annotations wrap
+`KeycloakUser`, `TokenPayload` and `str` respectively, marking them for litestar's
+explicit dependency injection; annotating with the bare types still works today but
+litestar deprecates it and removes it in 3.0.
 
 ## Testing
 

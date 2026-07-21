@@ -9,6 +9,9 @@ from litestar_keycloak import (
     TokenLocation,
     KeycloakUser,
     TokenPayload,
+    CurrentUser,
+    CurrentTokenPayload,
+    CurrentRawToken,
     require_roles,
     require_client_roles,
     require_scopes,
@@ -49,6 +52,17 @@ from litestar_keycloak import (
       show_source: true
       show_root_heading: true
       members: true
+
+## Handler annotations
+
+Annotate handler parameters with these; the parameter names must stay
+`current_user`, `token_payload` and `raw_token`, since injection is name-based.
+
+| Annotation            | Injects        |
+| --------------------- | -------------- |
+| `CurrentUser`         | `KeycloakUser` |
+| `CurrentTokenPayload` | `TokenPayload` |
+| `CurrentRawToken`     | `str`          |
 
 ## Guards
 

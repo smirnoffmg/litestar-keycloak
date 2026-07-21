@@ -44,11 +44,11 @@ Inject the **raw_token** dependency and pass it in the request:
 
 ```python
 from litestar import get
-from litestar_keycloak import KeycloakUser
+from litestar_keycloak import CurrentRawToken
 import aiohttp
 
 @get("/proxy/downstream")
-async def call_downstream(raw_token: str) -> dict:
+async def call_downstream(raw_token: CurrentRawToken) -> dict:
     async with aiohttp.ClientSession() as session:
         async with session.get(
             "https://downstream.example.com/api/data",

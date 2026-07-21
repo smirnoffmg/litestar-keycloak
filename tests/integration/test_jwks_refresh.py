@@ -7,7 +7,7 @@ import pytest
 from litestar import Litestar, get
 from litestar.testing import TestClient
 
-from litestar_keycloak import KeycloakPlugin, KeycloakUser
+from litestar_keycloak import CurrentUser, KeycloakPlugin
 
 
 @pytest.mark.integration
@@ -16,7 +16,7 @@ def test_protected_route_with_valid_token(keycloak_config, user_token):
     """App with KeycloakPlugin validates token via JWKS and returns user."""
 
     @get("/me")
-    async def me(current_user: KeycloakUser) -> dict:
+    async def me(current_user: CurrentUser) -> dict:
         return {"sub": current_user.sub, "roles": list(current_user.realm_roles)}
 
     app = Litestar(
@@ -37,7 +37,7 @@ def test_jwks_warm_on_startup_fetches_real_keys(keycloak_config, user_token):
     """App startup warms JWKS; first request with valid token succeeds."""
 
     @get("/me")
-    async def me(current_user: KeycloakUser) -> dict:
+    async def me(current_user: CurrentUser) -> dict:
         return {"sub": current_user.sub, "roles": list(current_user.realm_roles)}
 
     app = Litestar(

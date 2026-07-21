@@ -4,6 +4,10 @@ Registers injectable dependencies — ``current_user`` (``KeycloakUser``),
 ``token_payload`` (``TokenPayload``), and ``raw_token`` (``str``) — so
 route handlers can declare them as parameters without any manual wiring.
 Each provider reads from the connection state populated by the auth backend.
+
+Handlers should annotate with ``CurrentUser``, ``CurrentTokenPayload`` and
+``CurrentRawToken``.  Bare annotations (``current_user: KeycloakUser``) still
+work but are deprecated by litestar and stop working in litestar 3.0.
 """
 
 from __future__ import annotations
@@ -15,8 +19,27 @@ from litestar.di import Provide
 from litestar_keycloak.auth import RAW_TOKEN_STATE_KEY, TOKEN_STATE_KEY
 from litestar_keycloak.models import KeycloakUser, TokenPayload  # noqa: TC001
 
+# Injection is name-based: these aliases only add the marker litestar 3.0 will
+# require, so the parameter name must still be exactly ``current_user``,
+# ``token_payload`` or ``raw_token``.
 if TYPE_CHECKING:
     from litestar.connection import Request
+    from litestar.di import NamedDependency
+
+    type CurrentUser = NamedDependency[KeycloakUser]
+    type CurrentTokenPayload = NamedDependency[TokenPayload]
+    type CurrentRawToken = NamedDependency[str]
+else:
+    try:
+        from litestar.di import NamedDependency
+
+        CurrentUser = NamedDependency[KeycloakUser]
+        CurrentTokenPayload = NamedDependency[TokenPayload]
+        CurrentRawToken = NamedDependency[str]
+    except ImportError:  # litestar < 2.23 has no NamedDependency marker
+        CurrentUser = KeycloakUser
+        CurrentTokenPayload = TokenPayload
+        CurrentRawToken = str
 
 
 async def _provide_current_user(request: Request[Any, Any, Any]) -> KeycloakUser:

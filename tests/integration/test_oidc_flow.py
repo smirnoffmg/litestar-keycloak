@@ -7,10 +7,10 @@ from litestar.testing import TestClient
 def app(keycloak_config):
     from litestar import Litestar, get
 
-    from litestar_keycloak import KeycloakPlugin, KeycloakUser
+    from litestar_keycloak import CurrentUser, KeycloakPlugin
 
     @get("/me")
-    async def me(current_user: KeycloakUser) -> dict:
+    async def me(current_user: CurrentUser) -> dict:
         return {"sub": current_user.sub, "roles": list(current_user.realm_roles)}
 
     return Litestar(

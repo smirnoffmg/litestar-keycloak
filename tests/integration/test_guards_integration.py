@@ -4,17 +4,17 @@ import pytest
 from litestar import Litestar, get
 from litestar.testing import TestClient
 
-from litestar_keycloak import KeycloakPlugin, KeycloakUser
+from litestar_keycloak import CurrentUser, KeycloakPlugin
 from litestar_keycloak.guards import require_roles
 
 
 def _app(keycloak_config):
     @get("/me")
-    async def me(current_user: KeycloakUser) -> dict:
+    async def me(current_user: CurrentUser) -> dict:
         return {"sub": current_user.sub, "roles": list(current_user.realm_roles)}
 
     @get("/admin", guards=[require_roles("admin")])
-    async def admin(current_user: KeycloakUser) -> dict:
+    async def admin(current_user: CurrentUser) -> dict:
         return {"sub": current_user.sub, "roles": list(current_user.realm_roles)}
 
     return Litestar(

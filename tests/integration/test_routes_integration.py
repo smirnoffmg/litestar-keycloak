@@ -7,7 +7,7 @@ import pytest
 from litestar import Litestar, get
 from litestar.testing import TestClient
 
-from litestar_keycloak import KeycloakPlugin, KeycloakUser
+from litestar_keycloak import CurrentUser, KeycloakPlugin
 
 
 def _refresh_tokens(keycloak_config, refresh_token: str) -> dict:
@@ -51,7 +51,7 @@ def test_valid_user_token_after_refresh(keycloak_config, user_token_response):
     new_access = result["access_token"]
 
     @get("/me")
-    async def me(current_user: KeycloakUser) -> dict:
+    async def me(current_user: CurrentUser) -> dict:
         return {"sub": current_user.sub, "roles": list(current_user.realm_roles)}
 
     app = Litestar(

@@ -128,7 +128,7 @@ class KeycloakUser:
     handlers don't need to know about raw JWT claim structures::
 
         @get("/me")
-        async def me(current_user: KeycloakUser) -> dict:
+        async def me(current_user: CurrentUser) -> dict:
             return {"name": current_user.name, "roles": current_user.realm_roles}
     """
 

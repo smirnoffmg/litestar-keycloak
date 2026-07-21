@@ -36,10 +36,10 @@ pip install litestar-keycloak
 
 ```python
 from litestar import Litestar, get
-from litestar_keycloak import KeycloakPlugin, KeycloakConfig, KeycloakUser
+from litestar_keycloak import KeycloakPlugin, KeycloakConfig, CurrentUser
 
 @get("/me")
-async def me(current_user: KeycloakUser) -> dict:
+async def me(current_user: CurrentUser) -> dict:
     return {
         "sub": current_user.sub,
         "username": current_user.preferred_username,
@@ -58,7 +58,7 @@ app = Litestar(
 )
 ```
 
-Any route that declares `current_user: KeycloakUser` automatically requires a valid Bearer token.
+Any route that declares `current_user: CurrentUser` automatically requires a valid Bearer token.
 
 ## Guards
 
