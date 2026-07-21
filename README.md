@@ -1,8 +1,17 @@
 # litestar-keycloak
 
 [![PyPI version](https://img.shields.io/pypi/v/litestar-keycloak)](https://pypi.org/project/litestar-keycloak/)
-[![CI](https://img.shields.io/github/actions/workflow/status/smirnoffmg/litestar-keycloak/ci.yml?branch=main)](https://github.com/smirnoffmg/litestar-keycloak/actions/workflows/ci.yml)
+[![Python versions](https://img.shields.io/pypi/pyversions/litestar-keycloak)](https://pypi.org/project/litestar-keycloak/)
+[![Development status](https://img.shields.io/pypi/status/litestar-keycloak)](https://pypi.org/project/litestar-keycloak/)
+[![License](https://img.shields.io/pypi/l/litestar-keycloak)](https://pypi.org/project/litestar-keycloak/)
 [![Downloads](https://img.shields.io/pypi/dm/litestar-keycloak)](https://pypistats.org/packages/litestar-keycloak)
+
+[![CI](https://img.shields.io/github/actions/workflow/status/smirnoffmg/litestar-keycloak/ci.yml?branch=main)](https://github.com/smirnoffmg/litestar-keycloak/actions/workflows/ci.yml)
+[![Coverage](https://img.shields.io/codecov/c/github/smirnoffmg/litestar-keycloak)](https://codecov.io/gh/smirnoffmg/litestar-keycloak)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![Checked with mypy](https://img.shields.io/badge/mypy-strict-2a6db2)](https://mypy-lang.org/)
+[![Typed](https://img.shields.io/pypi/types/litestar-keycloak)](https://peps.python.org/pep-0561/)
+[![Last commit](https://img.shields.io/github/last-commit/smirnoffmg/litestar-keycloak)](https://github.com/smirnoffmg/litestar-keycloak/commits/main)
 
 Keycloak authentication plugin for [Litestar](https://litestar.dev/).
 OIDC/OAuth2 integration using Litestar's native plugin protocol, dependency injection, and guard system.

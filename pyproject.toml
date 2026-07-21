@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "Keycloak OIDC/OAuth2 authentication plugin for Litestar"
 readme = "README.md"
 license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
 authors = [{ name = "Maksim Smirnov", email = "smirnoffmg@gmail.com" }]
 keywords = ["litestar", "keycloak", "oidc", "oauth2", "authentication", "jwt"]
