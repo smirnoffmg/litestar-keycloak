@@ -46,7 +46,8 @@ test = [
     "testcontainers[keycloak]>=4.0",
 ]
 lint = ["ruff>=0.8", "mypy>=1.13", "pre-commit>=4.0"]
-docs = ["mkdocs>=1.6", "mkdocs-material>=9.5", "mkdocstrings[python]>=0.27"]
+# mkdocs 2.0 is incompatible with mkdocs-material; revisit when moving off 1.x.
+docs = ["mkdocs>=1.6,<2", "mkdocs-material>=9.5", "mkdocstrings[python]>=0.27"]
 dev = [
     { include-group = "test" },
     { include-group = "lint" },
