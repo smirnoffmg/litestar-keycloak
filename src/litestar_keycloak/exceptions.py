@@ -113,11 +113,7 @@ class InsufficientScopeError(AuthorizationError):
 
 
 class KeycloakBackendError(KeycloakError):
-    """Communication with Keycloak failed (OIDC discovery, JWKS fetch, etc.)."""
-
-
-class OIDCDiscoveryError(KeycloakBackendError):
-    """Failed to fetch or parse the OpenID Connect discovery document."""
+    """Communication with Keycloak failed (e.g. a JWKS fetch)."""
 
 
 class JWKSFetchError(KeycloakBackendError):

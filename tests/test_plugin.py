@@ -10,6 +10,7 @@ from litestar_keycloak import KeycloakConfig, KeycloakPlugin
 from litestar_keycloak.exceptions import (
     AuthenticationError,
     AuthorizationError,
+    JWKSFetchError,
     KeycloakBackendError,
 )
 
@@ -25,27 +26,26 @@ def keycloak_config():
 
 
 def test_plugin_registers_middleware(keycloak_config):
-    """on_app_init adds auth middleware at position 0."""
+    """on_app_init adds the auth middleware."""
     app_config = AppConfig()
     assert app_config.middleware == []
     plugin = KeycloakPlugin(keycloak_config)
     plugin.on_app_init(app_config)
     assert len(app_config.middleware) == 1
-    # Middleware is a class (factory), not an instance
     assert app_config.middleware[0] is not None
 
 
-def test_middleware_inserted_at_position_zero(keycloak_config):
-    """Auth middleware is inserted at index 0, before any existing middleware."""
+def test_middleware_appended_after_existing(keycloak_config):
+    """Auth middleware is appended so it runs after app-level (session) middleware."""
     other_middleware = MagicMock()
     app_config = AppConfig()
     app_config.middleware = [other_middleware]
     plugin = KeycloakPlugin(keycloak_config)
     plugin.on_app_init(app_config)
     assert len(app_config.middleware) == 2
-    assert app_config.middleware[1] is other_middleware
-    # Keycloak auth middleware is at 0
-    assert app_config.middleware[0] is not other_middleware
+    # existing middleware stays first (outer); auth is appended last (inner)
+    assert app_config.middleware[0] is other_middleware
+    assert app_config.middleware[1] is not other_middleware
 
 
 def test_plugin_registers_exception_handlers(keycloak_config):
@@ -137,3 +137,34 @@ async def test_on_startup_calls_jwks_warm(keycloak_config):
     plugin._jwks_cache.warm = warm_mock
     await app_config.on_startup[0]()
     warm_mock.assert_called_once()
+
+
+async def test_on_startup_survives_keycloak_unavailable(keycloak_config):
+    """A JWKS fetch failure at startup is swallowed so the app can still boot."""
+    plugin = KeycloakPlugin(keycloak_config)
+    app_config = AppConfig()
+    plugin.on_app_init(app_config)
+    plugin._jwks_cache.warm = AsyncMock(side_effect=JWKSFetchError("Keycloak down"))
+    # Must not raise — the cache refetches lazily on the first request.
+    await app_config.on_startup[0]()
+    plugin._jwks_cache.warm.assert_awaited_once()
+
+
+def test_plugin_adds_shutdown_callback(keycloak_config):
+    """on_app_init appends an HTTP-client close to on_shutdown."""
+    app_config = AppConfig()
+    assert app_config.on_shutdown == []
+    plugin = KeycloakPlugin(keycloak_config)
+    plugin.on_app_init(app_config)
+    assert len(app_config.on_shutdown) == 1
+
+
+async def test_on_shutdown_closes_http_client(keycloak_config):
+    """The on_shutdown callback closes the shared HTTP client."""
+    app_config = AppConfig()
+    plugin = KeycloakPlugin(keycloak_config)
+    plugin.on_app_init(app_config)
+    close_mock = AsyncMock()
+    plugin._http.close = close_mock
+    await app_config.on_shutdown[0]()
+    close_mock.assert_called_once()

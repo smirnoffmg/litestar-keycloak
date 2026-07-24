@@ -91,19 +91,6 @@ def test_realm_url_strips_trailing_slash():
     assert not config.realm_url.endswith("//")
 
 
-def test_discovery_url_derived_correctly():
-    """discovery_url is realm_url + /.well-known/openid-configuration."""
-    config = KeycloakConfig(
-        server_url="https://kc.example.com",
-        realm="r",
-        client_id="c",
-    )
-    assert (
-        config.discovery_url
-        == "https://kc.example.com/realms/r/.well-known/openid-configuration"
-    )
-
-
 def test_jwks_url_derived_correctly():
     """jwks_url is realm_url + /protocol/openid-connect/certs."""
     config = KeycloakConfig(
@@ -180,6 +167,28 @@ def test_effective_audience_uses_explicit_override():
     assert config.effective_audience == "custom-audience"
 
 
+# --- issuer ---
+
+
+def test_issuer_defaults_to_realm_url():
+    """Without expected_issuer, issuer equals realm_url."""
+    config = KeycloakConfig(server_url="https://kc.internal", realm="r", client_id="c")
+    assert config.issuer == config.realm_url == "https://kc.internal/realms/r"
+
+
+def test_expected_issuer_overrides_derived_issuer():
+    """expected_issuer takes precedence — for frontend/backend URL splits."""
+    config = KeycloakConfig(
+        server_url="https://kc.internal",
+        realm="r",
+        client_id="c",
+        expected_issuer="https://sso.public.example.com/realms/r",
+    )
+    assert config.issuer == "https://sso.public.example.com/realms/r"
+    # backend endpoints still use server_url
+    assert config.jwks_url.startswith("https://kc.internal/")
+
+
 # --- Other ---
 
 
@@ -202,6 +211,20 @@ def test_default_values_are_sensible():
     assert config.http_timeout == 10
     assert config.excluded_paths == frozenset()
     assert config.issuer == config.realm_url
+
+
+def test_oidc_route_defaults():
+    """Defaults for the OIDC route settings."""
+    config = KeycloakConfig(
+        server_url="https://kc.example.com",
+        realm="r",
+        client_id="c",
+    )
+    assert config.callback_response_mode == "json"
+    assert config.cookie_secure is True
+    assert config.cookie_samesite == "lax"
+    assert config.post_login_redirect_uri == "/"
+    assert config.post_logout_redirect_uri is None
 
 
 def test_effective_excluded_paths_includes_auth_paths_when_include_routes():
@@ -232,3 +255,54 @@ def test_effective_excluded_paths_without_routes_returns_only_excluded_paths():
         excluded_paths=frozenset({"/health", "/public"}),
     )
     assert config.effective_excluded_paths == frozenset({"/health", "/public"})
+
+
+# --- exclusion patterns ---
+
+
+def _cfg(**kwargs):
+    return KeycloakConfig(
+        server_url="https://kc.example.com", realm="r", client_id="c", **kwargs
+    )
+
+
+def test_exclude_defaults():
+    """New exclusion fields default to empty / the standard opt key."""
+    config = _cfg()
+    assert config.exclude_patterns == ()
+    assert config.exclude_opt_key == "exclude_from_auth"
+
+
+def test_exclude_auth_patterns_none_when_nothing_excluded():
+    """No excluded paths or patterns yields None (an empty regex matches all)."""
+    assert _cfg().exclude_auth_patterns is None
+
+
+def test_exclude_auth_patterns_anchors_exact_paths():
+    """excluded_paths become anchored ^…$ regexes so they match exactly."""
+    config = _cfg(excluded_paths=frozenset({"/health"}))
+    assert config.exclude_auth_patterns == ["^/health$"]
+
+
+def test_exclude_auth_patterns_escapes_regex_metacharacters():
+    """Exact paths are regex-escaped, not treated as patterns."""
+    config = _cfg(excluded_paths=frozenset({"/a.b"}))
+    assert config.exclude_auth_patterns == [r"^/a\.b$"]
+
+
+def test_exclude_auth_patterns_appends_user_patterns_verbatim():
+    """exclude_patterns are added as-is after the anchored exact paths."""
+    config = _cfg(
+        excluded_paths=frozenset({"/health"}),
+        exclude_patterns=("^/public/", "^/docs"),
+    )
+    assert config.exclude_auth_patterns == ["^/health$", "^/public/", "^/docs"]
+
+
+def test_exclude_auth_patterns_includes_auth_routes_when_include_routes():
+    """Auth routes are anchored into the exclusion patterns when mounted."""
+    config = _cfg(include_routes=True, redirect_uri="https://app/callback")
+    patterns = config.exclude_auth_patterns
+    assert patterns is not None
+    assert "^/auth/login$" in patterns
+    assert "^/auth/callback$" in patterns

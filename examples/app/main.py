@@ -13,8 +13,6 @@ from typing import Any
 
 import aiohttp
 from litestar import Litestar, get
-from litestar.middleware.session.server_side import ServerSideSessionConfig
-from litestar.stores.memory import MemoryStore
 
 from litestar_keycloak import (
     CurrentRawToken,
@@ -59,9 +57,11 @@ keycloak_config = KeycloakConfig(
     excluded_paths=frozenset({"/", "/health", "/service/call-backend"}),
     optional_audiences=frozenset({KEYCLOAK_SERVICE_CLIENT_ID}),  # accept service tokens
 )
-
-# Session middleware (required for OAuth state in login/callback)
-session_config = ServerSideSessionConfig(store="sessions")
+# This example uses the default callback_response_mode="json": /auth/callback
+# returns the tokens as JSON for a SPA/BFF. For a server-rendered browser login,
+# set callback_response_mode="redirect" and add Litestar session middleware
+# (ServerSideSessionConfig) — the callback then stores tokens in the session and
+# redirects to post_login_redirect_uri, keeping the JWT off the browser.
 
 
 async def get_service_token() -> str:
@@ -213,6 +213,4 @@ app = Litestar(
         user_forward,
     ],
     plugins=[KeycloakPlugin(keycloak_config)],
-    middleware=[session_config.middleware],
-    stores={"sessions": MemoryStore()},
 )

@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 import aiohttp
 import jwt
@@ -31,6 +31,7 @@ from litestar_keycloak.models import TokenPayload
 
 if TYPE_CHECKING:
     from litestar_keycloak.config import KeycloakConfig
+    from litestar_keycloak.http_client import KeycloakHttpClient
 
 logger = logging.getLogger(__name__)
 
@@ -46,10 +47,10 @@ class JWKSCache:
     attempted before raising ``JWKSFetchError``.
     """
 
-    def __init__(self, jwks_url: str, ttl: int, http_timeout: int) -> None:
+    def __init__(self, jwks_url: str, ttl: int, http: KeycloakHttpClient) -> None:
         self._jwks_url = jwks_url
         self._ttl = ttl
-        self._http_timeout = aiohttp.ClientTimeout(total=http_timeout)
+        self._http = http
 
         self._keys: dict[str, PyJWK] = {}
         self._fetched_at: float = 0.0
@@ -134,15 +135,9 @@ class JWKSCache:
 
     async def _fetch_jwks(self) -> dict[str, Any]:
         try:
-            async with (
-                aiohttp.ClientSession(timeout=self._http_timeout) as session,
-                session.get(
-                    self._jwks_url,
-                    headers={"Accept": "application/json"},
-                ) as resp,
-            ):
-                resp.raise_for_status()
-                return cast("dict[str, Any]", await resp.json(content_type=None))
+            return await self._http.get_json(
+                self._jwks_url, headers={"Accept": "application/json"}
+            )
         except (aiohttp.ClientError, OSError) as exc:
             raise JWKSFetchError(
                 f"Failed to fetch JWKS from {self._jwks_url}: {exc}"

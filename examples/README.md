@@ -99,7 +99,7 @@ The compose file imports `tests/fixtures/realm-export.json`, which defines:
 ## What the example shows
 
 - **KeycloakPlugin** with `KeycloakConfig`: `server_url`, `realm`, `client_id`, `client_secret`, `include_routes=True`, `redirect_uri`.
-- **Session middleware** (server-side with `MemoryStore`) for OAuth `state` between `/auth/login` and `/auth/callback`.
+- **No session middleware** — OAuth `state` lives in a short-lived HttpOnly cookie set by the plugin's routes.
 - **Excluded paths**: `/` and `/health` do not require auth.
 - **Protected routes**: `/me` (any valid token), `/admin` (guard `require_roles("admin")`).
 - **Optional OIDC routes**: `/auth/login`, `/auth/callback`, `/auth/logout`, `/auth/refresh`.

@@ -45,6 +45,24 @@ async def test_verify_wrong_issuer_raises(token_verifier, make_token):
     )
 
 
+async def test_verify_accepts_frontend_issuer_via_expected_issuer(
+    keycloak_config, mock_jwks_cache, make_token
+):
+    """A token whose iss is Keycloak's frontend URL passes when expected_issuer set."""
+    frontend_iss = "https://sso.public.example.com/realms/test-realm"
+    token = make_token(iss=frontend_iss)
+
+    # Default config expects the server_url-derived issuer -> mismatch.
+    default_verifier = TokenVerifier(keycloak_config, mock_jwks_cache)
+    with pytest.raises(InvalidIssuerError):
+        await default_verifier.verify(token)
+
+    # With expected_issuer set to the frontend value, validation succeeds.
+    config = dataclasses.replace(keycloak_config, expected_issuer=frontend_iss)
+    payload = await TokenVerifier(config, mock_jwks_cache).verify(token)
+    assert payload.iss == frontend_iss
+
+
 async def test_verify_wrong_audience_raises(token_verifier, make_token):
     """Token with wrong aud raises InvalidAudienceError."""
     token = make_token(aud="wrong-client")

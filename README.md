@@ -18,7 +18,7 @@ OIDC/OAuth2 integration using Litestar's native plugin protocol, dependency inje
 
 ## Features
 
-- OIDC discovery and JWKS caching with automatic key rotation
+- JWKS caching with automatic key rotation
 - Bearer token validation (header or cookie)
 - Realm and client role guards
 - Scope-based access control
@@ -85,24 +85,28 @@ KeycloakConfig(
     realm="my-realm",
     client_id="my-app",
     client_secret="secret",            # confidential clients
-    token_location=TokenLocation.HEADER,  # HEADER (default) or COOKIE
+    token_location=TokenLocation.HEADER,  # where the middleware READS the token: HEADER (default) or COOKIE
     jwks_cache_ttl=3600,               # JWKS cache lifetime in seconds
     algorithms=("RS256",),             # JWT signing algorithms
-    include_routes=False,              # mount /auth/login, /callback, /logout
+    include_routes=False,              # mount /auth/login, /callback, /logout, /refresh
+    callback_response_mode="json",     # "json" (SPA) or "redirect" (server-side session)
+    post_login_redirect_uri="/",       # where redirect-mode login lands
     optional_audiences=frozenset({"my-service"}),  # accept service tokens too
 )
 ```
 
 Full option list: [docs/configuration.md](docs/configuration.md).
 
-When `include_routes=True`, the plugin mounts:
+When `include_routes=True`, the plugin mounts the authorization-code flow. OAuth `state` is kept in a short-lived HttpOnly cookie (no session middleware needed for `state`).
 
 | Endpoint             | Description                        |
 | -------------------- | ---------------------------------- |
 | `GET /auth/login`    | Redirect to Keycloak authorize     |
 | `GET /auth/callback` | Handle authorization code exchange |
-| `POST /auth/logout`  | End session (Keycloak + local)     |
+| `POST /auth/logout`  | End the Keycloak session           |
 | `POST /auth/refresh` | Refresh access token               |
+
+The callback follows `callback_response_mode`: **`"json"`** (default) returns the token response as JSON for a SPA/BFF; **`"redirect"`** stores the tokens in the **server-side session** and redirects to `post_login_redirect_uri` (requires Litestar session middleware — the JWT is never exposed to the browser). See [docs/guides/oidc-routes.md](docs/guides/oidc-routes.md).
 
 ## Testing
 

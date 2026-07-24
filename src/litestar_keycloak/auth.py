@@ -29,6 +29,12 @@ TOKEN_STATE_KEY = "keycloak_token"
 #: Key used to stash the raw token string on ``connection.state``.
 RAW_TOKEN_STATE_KEY = "keycloak_raw_token"
 
+#: Session keys used by ``callback_response_mode="redirect"`` to persist tokens
+#: server-side.  The middleware reads the access token from here when it is not
+#: present in the header/cookie.
+SESSION_ACCESS_TOKEN_KEY = "keycloak_access_token"
+SESSION_REFRESH_TOKEN_KEY = "keycloak_refresh_token"
+
 
 def create_auth_middleware(
     config: KeycloakConfig,
@@ -56,10 +62,11 @@ def create_auth_middleware(
 
             The raw token string and parsed payload are also placed on
             ``connection.state`` for the DI providers.
-            """
-            if connection.scope["path"] in config.effective_excluded_paths:
-                return AuthenticationResult(user=None, auth=None)
 
+            Excluded paths (``exclude_auth_patterns``) and per-handler opt-outs
+            are handled by the framework before this method is reached, so any
+            request that gets here is expected to carry a token.
+            """
             raw_token = _extract_token(connection, config)
             payload = await verifier.verify(raw_token)
             user = KeycloakUser.from_token(payload)
@@ -78,11 +85,36 @@ def _extract_token(
 ) -> str:
     """Pull the raw JWT string from the request.
 
-    Raises ``MissingTokenError`` when no token is found.
+    Reads from the configured location (header or cookie); if absent, falls back
+    to the server-side session (populated by ``callback_response_mode="redirect"``).
+    Raises ``MissingTokenError`` when no token is found in any source.
     """
-    if config.token_location is TokenLocation.HEADER:
-        return _extract_from_header(connection)
-    return _extract_from_cookie(connection, config.cookie_name)
+    try:
+        if config.token_location is TokenLocation.HEADER:
+            return _extract_from_header(connection)
+        return _extract_from_cookie(connection, config.cookie_name)
+    except MissingTokenError:
+        token = _extract_from_session(connection)
+        if token:
+            return token
+        raise
+
+
+def _extract_from_session(
+    connection: ASGIConnection[Any, Any, Any, Any],
+) -> str | None:
+    """Return the access token stored in the session, or ``None``.
+
+    Reads ``scope`` directly (rather than ``connection.session``, which raises
+    when no session middleware is installed) so the fallback is a no-op for
+    header/cookie-only apps.
+    """
+    session = connection.scope.get("session")
+    if isinstance(session, dict):
+        token = session.get(SESSION_ACCESS_TOKEN_KEY)
+        if token:
+            return str(token)
+    return None
 
 
 def _extract_from_header(

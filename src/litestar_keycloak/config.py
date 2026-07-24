@@ -10,7 +10,9 @@ them by hand.
 from __future__ import annotations
 
 import enum
+import re
 from dataclasses import dataclass, field
+from typing import Literal
 
 
 class TokenLocation(enum.Enum):
@@ -56,7 +58,16 @@ class KeycloakConfig:
     """Where to read the bearer token from: ``Authorization`` header or a cookie."""
 
     cookie_name: str = "access_token"
-    """Cookie name when ``token_location`` is ``COOKIE``."""
+    """Cookie name the middleware reads when ``token_location`` is ``COOKIE``.
+    The plugin never *sets* this cookie — how the token gets there is the
+    application's responsibility (see ``callback_response_mode``)."""
+
+    cookie_secure: bool = True
+    """``Secure`` attribute on the OAuth ``state`` cookie the routes set.  Set
+    ``False`` for plain-HTTP local development."""
+
+    cookie_samesite: Literal["lax", "strict", "none"] = "lax"
+    """``SameSite`` attribute on the OAuth ``state`` cookie the routes set."""
 
     algorithms: tuple[str, ...] = ("RS256",)
     """Accepted JWT signing algorithms."""
@@ -79,9 +90,30 @@ class KeycloakConfig:
     """OAuth2 redirect URI for the authorization code flow.
     Required when ``include_routes`` is ``True``."""
 
+    callback_response_mode: Literal["json", "redirect"] = "json"
+    """What ``/auth/callback`` does after exchanging the code:
+
+    - ``"json"`` (default): return the token response as JSON — the SPA/BFF
+      stores the access token and sends it as ``Authorization: Bearer``.
+    - ``"redirect"``: store the tokens in the **server-side session** and redirect
+      to ``post_login_redirect_uri`` — for server-rendered apps.  Requires
+      Litestar session middleware (e.g. ``ServerSideSessionConfig``); the auth
+      middleware then reads the access token from the session."""
+
+    post_login_redirect_uri: str = "/"
+    """Where ``redirect``-mode login redirects after storing tokens in the session."""
+
+    post_logout_redirect_uri: str | None = None
+    """Where ``redirect``-mode logout redirects.  Returns JSON status when ``None``."""
+
     # -- advanced ----------------------------------------------------------
     audience: str | None = None
     """Expected ``aud`` claim.  Defaults to ``client_id`` when ``None``."""
+
+    expected_issuer: str | None = None
+    """Expected ``iss`` claim.  Defaults to ``realm_url`` when ``None``.  Set this
+    when Keycloak's frontend/hostname URL differs from ``server_url`` (e.g. behind
+    a reverse proxy), so token issuer validation matches the value Keycloak signs."""
 
     optional_audiences: frozenset[str] = field(default_factory=frozenset)
     """Additional audiences to accept (e.g. service client IDs)."""
@@ -95,7 +127,19 @@ class KeycloakConfig:
     """Timeout in seconds for outgoing HTTP calls to Keycloak."""
 
     excluded_paths: frozenset[str] = field(default_factory=frozenset)
-    """Request paths that skip authentication entirely (e.g. health checks)."""
+    """Exact request paths that skip authentication entirely (e.g. ``/health``).
+    Matched literally — for prefixes or subtrees use ``exclude_patterns``."""
+
+    exclude_patterns: tuple[str, ...] = ()
+    """Regex patterns whose matching request paths skip authentication.
+
+    Unlike ``excluded_paths`` (exact match), these cover prefixes and subtrees,
+    e.g. ``("^/public/", "^/docs")``.  Patterns are matched unanchored against
+    the path, so anchor with ``^`` to match from the start."""
+
+    exclude_opt_key: str = "exclude_from_auth"
+    """Route-handler ``opt`` key for per-handler opt-out, e.g.
+    ``@get("/open", exclude_from_auth=True)``."""
 
     # -- derived properties ------------------------------------------------
 
@@ -106,13 +150,16 @@ class KeycloakConfig:
 
     @property
     def issuer(self) -> str:
-        """Expected ``iss`` claim value (same as ``realm_url``)."""
-        return self.realm_url
+        """Expected ``iss`` claim value.
 
-    @property
-    def discovery_url(self) -> str:
-        """OpenID Connect discovery document URL."""
-        return f"{self.realm_url}/.well-known/openid-configuration"
+        Defaults to ``realm_url``.  Set ``expected_issuer`` when Keycloak issues
+        tokens under a different base (its configured frontend/hostname URL),
+        which is common behind a reverse proxy where the public URL differs from
+        the ``server_url`` the backend uses to reach Keycloak.
+        """
+        if self.expected_issuer is not None:
+            return self.expected_issuer
+        return self.realm_url
 
     @property
     def jwks_url(self) -> str:
@@ -156,6 +203,21 @@ class KeycloakConfig:
             f"{self.auth_prefix}/refresh",
         }
         return self.excluded_paths | auth_paths
+
+    @property
+    def exclude_auth_patterns(self) -> list[str] | None:
+        """Regex patterns for request paths that bypass the auth middleware.
+
+        Exact ``excluded_paths`` (and the auth routes when ``include_routes``) are
+        anchored to ``^…$``; ``exclude_patterns`` are used verbatim.  Returns
+        ``None`` when nothing is excluded — an empty pattern list would compile to
+        an empty regex that greedily matches every path.
+        """
+        patterns = [
+            f"^{re.escape(path)}$" for path in sorted(self.effective_excluded_paths)
+        ]
+        patterns.extend(self.exclude_patterns)
+        return patterns or None
 
     def __post_init__(self) -> None:
         if self.include_routes and self.redirect_uri is None:

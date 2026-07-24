@@ -8,6 +8,7 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from litestar_keycloak.exceptions import JWKSFetchError
+from litestar_keycloak.http_client import KeycloakHttpClient
 from litestar_keycloak.token import JWKSCache
 
 
@@ -35,7 +36,7 @@ def _jwks_response(*kids: str) -> dict:
 
 async def test_warm_populates_cache():
     """warm() calls _refresh and populates the cache."""
-    cache = JWKSCache("http://example.com/jwks", ttl=3600, http_timeout=10)
+    cache = JWKSCache("http://example.com/jwks", ttl=3600, http=KeycloakHttpClient(10))
     jwks_data = _jwks_response("kid-1")
     with patch.object(
         cache, "_fetch_jwks", new_callable=AsyncMock, return_value=jwks_data
@@ -48,7 +49,7 @@ async def test_warm_populates_cache():
 
 async def test_get_key_returns_cached_key_without_refetch():
     """After warm(), get_key returns from cache without calling _fetch_jwks again."""
-    cache = JWKSCache("http://example.com/jwks", ttl=3600, http_timeout=10)
+    cache = JWKSCache("http://example.com/jwks", ttl=3600, http=KeycloakHttpClient(10))
     jwks_data = _jwks_response("kid-1")
     fetch_mock = AsyncMock(return_value=jwks_data)
     with patch.object(cache, "_fetch_jwks", fetch_mock):
@@ -61,7 +62,7 @@ async def test_get_key_returns_cached_key_without_refetch():
 
 async def test_get_key_refreshes_on_ttl_expiry():
     """When TTL has expired, get_key triggers a refresh."""
-    cache = JWKSCache("http://example.com/jwks", ttl=1, http_timeout=10)
+    cache = JWKSCache("http://example.com/jwks", ttl=1, http=KeycloakHttpClient(10))
     jwks_data = _jwks_response("kid-1")
     # Patch time.monotonic so _is_expired is controlled.
     with (
@@ -80,7 +81,7 @@ async def test_get_key_refreshes_on_ttl_expiry():
 
 async def test_get_key_refreshes_on_unknown_kid():
     """When kid is not in cache, get_key triggers refresh then looks up again."""
-    cache = JWKSCache("http://example.com/jwks", ttl=3600, http_timeout=10)
+    cache = JWKSCache("http://example.com/jwks", ttl=3600, http=KeycloakHttpClient(10))
     jwks_with_kid2 = _jwks_response("kid-2")
     fetch_mock = AsyncMock(side_effect=[{"keys": []}, jwks_with_kid2])
     with patch.object(cache, "_fetch_jwks", fetch_mock):
@@ -93,7 +94,7 @@ async def test_get_key_refreshes_on_unknown_kid():
 
 async def test_get_key_raises_after_refresh_if_kid_still_missing():
     """If refresh returns JWKS without requested kid, get_key raises JWKSFetchError."""
-    cache = JWKSCache("http://example.com/jwks", ttl=3600, http_timeout=10)
+    cache = JWKSCache("http://example.com/jwks", ttl=3600, http=KeycloakHttpClient(10))
     jwks_data = _jwks_response("other-kid")
     with (
         patch.object(
@@ -106,7 +107,7 @@ async def test_get_key_raises_after_refresh_if_kid_still_missing():
 
 async def test_concurrent_refreshes_only_fetch_once():
     """Concurrent get_key when cache empty results in single _fetch_jwks call."""
-    cache = JWKSCache("http://example.com/jwks", ttl=3600, http_timeout=10)
+    cache = JWKSCache("http://example.com/jwks", ttl=3600, http=KeycloakHttpClient(10))
     jwks_data = _jwks_response("kid-1")
     with patch.object(
         cache, "_fetch_jwks", new_callable=AsyncMock, return_value=jwks_data
@@ -123,7 +124,7 @@ async def test_concurrent_refreshes_only_fetch_once():
 
 async def test_ttl_zero_always_refetches():
     """When ttl=0, each get_key triggers _refresh; warm + get_key = 2 fetches."""
-    cache = JWKSCache("http://example.com/jwks", ttl=0, http_timeout=10)
+    cache = JWKSCache("http://example.com/jwks", ttl=0, http=KeycloakHttpClient(10))
     jwks_data = _jwks_response("kid-1")
     with patch.object(
         cache, "_fetch_jwks", new_callable=AsyncMock, return_value=jwks_data
@@ -136,7 +137,7 @@ async def test_ttl_zero_always_refetches():
 
 async def test_fetch_failure_raises_jwks_fetch_error():
     """When _fetch_jwks raises, get_key raises JWKSFetchError."""
-    cache = JWKSCache("http://example.com/jwks", ttl=3600, http_timeout=10)
+    cache = JWKSCache("http://example.com/jwks", ttl=3600, http=KeycloakHttpClient(10))
     with (
         patch.object(
             cache,
@@ -151,7 +152,7 @@ async def test_fetch_failure_raises_jwks_fetch_error():
 
 async def test_malformed_jwks_response_skips_bad_keys():
     """Invalid or non-RSA keys in JWKS are skipped; valid keys are cached."""
-    cache = JWKSCache("http://example.com/jwks", ttl=3600, http_timeout=10)
+    cache = JWKSCache("http://example.com/jwks", ttl=3600, http=KeycloakHttpClient(10))
     valid_jwk = _make_jwk_dict("valid-kid")
     jwks_data = {
         "keys": [
@@ -172,7 +173,7 @@ async def test_malformed_jwks_response_skips_bad_keys():
 
 async def test_jwks_key_without_kid_is_skipped():
     """A JWK with no 'kid' is skipped without disturbing valid keys."""
-    cache = JWKSCache("http://example.com/jwks", ttl=3600, http_timeout=10)
+    cache = JWKSCache("http://example.com/jwks", ttl=3600, http=KeycloakHttpClient(10))
     no_kid = {k: v for k, v in _make_jwk_dict("tmp").items() if k != "kid"}
     valid_jwk = _make_jwk_dict("valid-kid")
     jwks_data = {"keys": [no_kid, valid_jwk]}
@@ -185,7 +186,7 @@ async def test_jwks_key_without_kid_is_skipped():
 
 async def test_unparseable_rsa_jwk_is_skipped():
     """An RSA JWK that PyJWK cannot parse is skipped; valid keys still load."""
-    cache = JWKSCache("http://example.com/jwks", ttl=3600, http_timeout=10)
+    cache = JWKSCache("http://example.com/jwks", ttl=3600, http=KeycloakHttpClient(10))
     bad_rsa = {"kty": "RSA", "kid": "bad-kid", "n": "!!!not-base64!!!", "e": "AQAB"}
     valid_jwk = _make_jwk_dict("valid-kid")
     jwks_data = {"keys": [bad_rsa, valid_jwk]}
@@ -201,6 +202,10 @@ async def test_unparseable_rsa_jwk_is_skipped():
 async def test_fetch_jwks_network_error_wrapped_as_jwks_fetch_error():
     """_fetch_jwks wraps a real aiohttp connection error as JWKSFetchError."""
     # Port 1 is reserved and refuses connections -> aiohttp.ClientError.
-    cache = JWKSCache("http://127.0.0.1:1/jwks", ttl=3600, http_timeout=2)
-    with pytest.raises(JWKSFetchError, match="Failed to fetch JWKS"):
-        await cache._fetch_jwks()
+    http = KeycloakHttpClient(2)
+    cache = JWKSCache("http://127.0.0.1:1/jwks", ttl=3600, http=http)
+    try:
+        with pytest.raises(JWKSFetchError, match="Failed to fetch JWKS"):
+            await cache._fetch_jwks()
+    finally:
+        await http.close()

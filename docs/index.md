@@ -4,7 +4,7 @@ Keycloak OIDC/OAuth2 authentication plugin for [Litestar](https://litestar.dev/)
 
 ## Features
 
-- **OIDC discovery and JWKS** — Fetches and caches Keycloak's JSON Web Key Set with configurable TTL; retries once on key rotation.
+- **JWKS caching** — Fetches and caches Keycloak's JSON Web Key Set with configurable TTL; retries once on key rotation.
 - **Bearer token validation** — Reads the token from the `Authorization` header or a cookie; validates signature, issuer, audience, and expiry.
 - **Guards** — Realm roles, client roles, and scopes with ALL/ANY match strategies.
 - **Dependency injection** — `KeycloakUser`, `TokenPayload`, and raw token string are available as request dependencies.
@@ -64,7 +64,8 @@ The plugin is configured with a single **KeycloakConfig** instance. Only `server
 | `include_routes`     | `False`                | Mount login/callback/logout/refresh under `auth_prefix`. |
 | `redirect_uri`       | `None`                 | Required when `include_routes=True`.                     |
 | `auth_prefix`        | `"/auth"`              | URL prefix for OIDC routes.                              |
-| `excluded_paths`     | `frozenset()`          | Paths that skip authentication (exact match).            |
+| `excluded_paths`     | `frozenset()`          | Exact paths that skip authentication.                    |
+| `exclude_patterns`   | `()`                   | Regex patterns for path prefixes/subtrees that skip auth. |
 | `audience`           | `None`                 | Expected `aud` claim; defaults to `client_id`.           |
 | `optional_audiences` | `frozenset()`          | Extra audiences (e.g. service client IDs) to accept.     |
 | `jwks_cache_ttl`     | `3600`                 | JWKS cache TTL in seconds.                               |
@@ -104,14 +105,14 @@ See [Guards](guides/guards.md).
 
 Set `include_routes=True` and provide `redirect_uri` to mount:
 
-| Method and path      | Description                                                        |
-| -------------------- | ------------------------------------------------------------------ |
-| `GET /auth/login`    | Redirects to Keycloak's authorization endpoint.                    |
-| `GET /auth/callback` | Exchanges the authorization code for tokens (returns JSON).        |
-| `POST /auth/logout`  | Ends session (Keycloak + local); body may include `refresh_token`. |
-| `POST /auth/refresh` | Body: `{"refresh_token": "..."}`; returns new tokens.              |
+| Method and path      | Description                                                                              |
+| -------------------- | --------------------------------------------------------------------------------------- |
+| `GET /auth/login`    | Redirects to Keycloak's authorization endpoint.                                         |
+| `GET /auth/callback` | Exchanges the code; returns JSON (`"json"` mode) or stores tokens in the session + redirects (`"redirect"` mode). |
+| `POST /auth/logout`  | Ends the Keycloak session (clears session tokens in `"redirect"` mode).                  |
+| `POST /auth/refresh` | Rotates the tokens (from the request body in `"json"` mode, from the session in `"redirect"` mode). |
 
-**Session required** — Login stores OAuth `state` in the session; callback validates it. You must add Litestar's session middleware (e.g. `CookieBackendConfig` or `ServerSideSessionConfig`) yourself.
+OAuth `state` is stored in a short-lived HttpOnly cookie — no session middleware is needed for `state`. `"redirect"` mode additionally requires session middleware for token storage.
 
 See [OIDC routes](guides/oidc-routes.md).
 
