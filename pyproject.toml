@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "litestar-keycloak"
-version = "0.2.0"
+version = "0.3.0"
 description = "Keycloak OIDC/OAuth2 authentication plugin for Litestar"
 readme = "README.md"
 license = "MIT"
@@ -29,7 +29,7 @@ dependencies = ["litestar>=2.0", "aiohttp>=3.9", "PyJWT[crypto]>=2.0"]
 
 [project.urls]
 Homepage = "https://github.com/smirnoffmg/litestar-keycloak"
-Documentation = "https://smirnoffmg.github.io/litestar-keycloak/"
+Documentation = "https://smirnoffmg.dev/litestar-keycloak/"
 Repository = "https://github.com/smirnoffmg/litestar-keycloak"
 Issues = "https://github.com/smirnoffmg/litestar-keycloak/issues"
 Changelog = "https://github.com/smirnoffmg/litestar-keycloak/releases"

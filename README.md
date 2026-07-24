@@ -2,37 +2,31 @@
 
 [![PyPI version](https://img.shields.io/pypi/v/litestar-keycloak)](https://pypi.org/project/litestar-keycloak/)
 [![Python versions](https://img.shields.io/pypi/pyversions/litestar-keycloak)](https://pypi.org/project/litestar-keycloak/)
-[![Development status](https://img.shields.io/pypi/status/litestar-keycloak)](https://pypi.org/project/litestar-keycloak/)
 [![License](https://img.shields.io/pypi/l/litestar-keycloak)](https://pypi.org/project/litestar-keycloak/)
-[![Downloads](https://img.shields.io/pypi/dm/litestar-keycloak)](https://pypistats.org/packages/litestar-keycloak)
-
 [![CI](https://img.shields.io/github/actions/workflow/status/smirnoffmg/litestar-keycloak/ci.yml?branch=main)](https://github.com/smirnoffmg/litestar-keycloak/actions/workflows/ci.yml)
 [![Coverage](https://img.shields.io/codecov/c/github/smirnoffmg/litestar-keycloak)](https://codecov.io/gh/smirnoffmg/litestar-keycloak)
-[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![Checked with mypy](https://img.shields.io/badge/mypy-strict-2a6db2)](https://mypy-lang.org/)
-[![Typed](https://img.shields.io/pypi/types/litestar-keycloak)](https://peps.python.org/pep-0561/)
-[![Last commit](https://img.shields.io/github/last-commit/smirnoffmg/litestar-keycloak)](https://github.com/smirnoffmg/litestar-keycloak/commits/main)
 
-Keycloak authentication plugin for [Litestar](https://litestar.dev/).
-OIDC/OAuth2 integration using Litestar's native plugin protocol, dependency injection, and guard system.
+Keycloak OIDC/OAuth2 authentication plugin for [Litestar](https://litestar.dev/) —
+token validation, dependency injection, and guards via Litestar's native plugin protocol.
+
+📖 **[Documentation](https://smirnoffmg.dev/litestar-keycloak/)**
 
 ## Features
 
+- Bearer token validation (header, cookie, or server-side session)
 - JWKS caching with automatic key rotation
-- Bearer token validation (header or cookie)
-- Realm and client role guards
-- Scope-based access control
+- Realm/client role and scope guards
 - `KeycloakUser` injection via Litestar DI
-- Optional login/callback/logout route group
-- Async HTTP via aiohttp for token exchange and JWKS requests
+- Optional login/callback/logout/refresh routes — SPA (JSON) or server-rendered (session) flow
 
 ## Installation
 
 ```bash
-pip install litestar-keycloak
+uv add litestar-keycloak
 ```
 
-## Quick Start
+## Quick start
 
 ```python
 from litestar import Litestar, get
@@ -40,128 +34,37 @@ from litestar_keycloak import KeycloakPlugin, KeycloakConfig, CurrentUser
 
 @get("/me")
 async def me(current_user: CurrentUser) -> dict:
-    return {
-        "sub": current_user.sub,
-        "username": current_user.preferred_username,
-        "roles": current_user.realm_roles,
-    }
+    return {"sub": current_user.sub, "roles": current_user.realm_roles}
 
 app = Litestar(
     route_handlers=[me],
-    plugins=[KeycloakPlugin(
-        KeycloakConfig(
-            server_url="https://keycloak.example.com",
-            realm="my-realm",
-            client_id="my-app",
-        )
-    )],
+    plugins=[KeycloakPlugin(KeycloakConfig(
+        server_url="https://keycloak.example.com",
+        realm="my-realm",
+        client_id="my-app",
+    ))],
 )
 ```
 
-Any route that declares `current_user: CurrentUser` automatically requires a valid Bearer token.
+Any route that declares `current_user: CurrentUser` requires a valid Bearer token.
 
 ## Guards
 
-Restrict access by roles or scopes:
-
 ```python
-from litestar import get
 from litestar_keycloak import require_roles, require_scopes
 
 @get("/admin", guards=[require_roles("admin")])
-async def admin_panel() -> dict:
-    return {"msg": "welcome, admin"}
+async def admin_panel() -> dict: ...
 
 @get("/reports", guards=[require_scopes("reports:read")])
-async def reports() -> dict:
-    return {"msg": "here are your reports"}
+async def reports() -> dict: ...
 ```
-
-## Configuration
-
-```python
-KeycloakConfig(
-    server_url="https://keycloak.example.com",
-    realm="my-realm",
-    client_id="my-app",
-    client_secret="secret",            # confidential clients
-    token_location=TokenLocation.HEADER,  # where the middleware READS the token: HEADER (default) or COOKIE
-    jwks_cache_ttl=3600,               # JWKS cache lifetime in seconds
-    algorithms=("RS256",),             # JWT signing algorithms
-    include_routes=False,              # mount /auth/login, /callback, /logout, /refresh
-    callback_response_mode="json",     # "json" (SPA) or "redirect" (server-side session)
-    post_login_redirect_uri="/",       # where redirect-mode login lands
-    optional_audiences=frozenset({"my-service"}),  # accept service tokens too
-)
-```
-
-Full option list: [docs/configuration.md](docs/configuration.md).
-
-When `include_routes=True`, the plugin mounts the authorization-code flow. OAuth `state` is kept in a short-lived HttpOnly cookie (no session middleware needed for `state`).
-
-| Endpoint             | Description                        |
-| -------------------- | ---------------------------------- |
-| `GET /auth/login`    | Redirect to Keycloak authorize     |
-| `GET /auth/callback` | Handle authorization code exchange |
-| `POST /auth/logout`  | End the Keycloak session           |
-| `POST /auth/refresh` | Refresh access token               |
-
-The callback follows `callback_response_mode`: **`"json"`** (default) returns the token response as JSON for a SPA/BFF; **`"redirect"`** stores the tokens in the **server-side session** and redirects to `post_login_redirect_uri` (requires Litestar session middleware — the JWT is never exposed to the browser). See [docs/guides/oidc-routes.md](docs/guides/oidc-routes.md).
-
-## Testing
-
-### Unit tests (no Keycloak required)
-
-Test utilities live in `tests/conftest.py`: `create_test_token()` and `MockKeycloakPlugin()`. Use them in your tests (e.g. when running pytest from this repo, or import from conftest):
-
-```python
-from tests.conftest import create_test_token, MockKeycloakPlugin
-
-# Mint a fake JWT with arbitrary claims
-token = create_test_token(sub="user-1", realm_roles=["admin"])
-
-# Use MockKeycloakPlugin to skip real JWKS validation
-app = Litestar(
-    route_handlers=[...],
-    plugins=[MockKeycloakPlugin()],
-)
-```
-
-### Integration tests (real Keycloak via testcontainers)
-
-```python
-from testcontainers.keycloak import KeycloakContainer
-
-kc = (
-    KeycloakContainer("quay.io/keycloak/keycloak:26.0")
-    .with_command("start-dev --import-realm")
-    .with_volume_mapping(
-        "tests/fixtures/realm-export.json",
-        "/opt/keycloak/data/import/realm-export.json",
-        "ro",
-    )
-)
-kc.start()
-```
-
-See `tests/fixtures/realm-export.json` for a pre-configured realm with test users and roles.
-
-## Service-to-service
-
-To accept tokens from a service client (e.g. client_credentials), add its client ID to **optional_audiences**. Use the **raw_token** dependency to forward the caller's token to downstream APIs. See [Service-to-service](docs/guides/service-to-service.md).
 
 ## Documentation
 
-- **Guides**: [Configuration](docs/configuration.md), [Guards](docs/guides/guards.md), [OIDC routes](docs/guides/oidc-routes.md), [Testing](docs/guides/testing.md). Build the site with `mkdocs build` (or `mkdocs serve`).
-- **Example app** with docker-compose and smoke tests: [examples/](examples/).
-
-## Dependencies
-
-| Package                    | Purpose                         |
-| -------------------------- | ------------------------------- |
-| `litestar[standard]` ≥ 2.0 | Web framework (plugin target)   |
-| `aiohttp`                  | Async HTTP for token/JWKS calls |
-| `PyJWT[crypto]`            | JWT validation                  |
+Configuration, guards, OIDC routes, and the SPA / server-rendered flows are covered in the
+**[full documentation](https://smirnoffmg.dev/litestar-keycloak/)**. A runnable
+[example app](examples/) with docker-compose is included.
 
 ## License
 
