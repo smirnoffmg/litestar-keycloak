@@ -1,43 +1,47 @@
-# v0.3.0
+# v0.3.1
 
-Server-side session login flow for the built-in OIDC routes, plus a round of
-hardening across auth exclusion, HTTP, issuer validation, and startup resilience.
+Patch release. Two bug fixes around token rejection and the testing helpers, plus
+a substantially expanded test suite.
 
-## Highlights
+## Bug fixes
 
-- **Server-side session login flow.** The mounted OIDC routes gain
-  `callback_response_mode`: `"json"` (default, unchanged for SPAs) returns tokens
-  as JSON; `"redirect"` stores the access/refresh tokens in the **server-side
-  session** and redirects into your app, so the JWT never reaches the browser.
-  The auth middleware reads the token from the session on subsequent requests.
-  Addresses #1.
-- **Flexible auth exclusion.** Skip authentication with regex `exclude_patterns`
-  (prefixes/subtrees) and per-handler `exclude_from_auth=True`, in addition to
-  exact `excluded_paths`. `OPTIONS` requests bypass auth by default.
-- **Pooled HTTP client.** JWKS and token/logout calls now share one
-  connection-pooled `aiohttp` session, created lazily and closed on shutdown,
-  instead of a new session per request.
-- **`expected_issuer` override.** Validate `iss` against Keycloak's
-  frontend/hostname URL when it differs from `server_url` (e.g. behind a reverse
-  proxy).
-- **Best-effort JWKS warm-up.** If Keycloak is unreachable at startup, the app
-  now boots anyway (a warning is logged) and fetches keys on the first request,
-  instead of aborting startup.
-- **Integration tests** covering the service-to-service, SPA, and server-rendered
-  (session) scenarios against real Keycloak.
+- **Malformed tokens now return 401 instead of 500.** `TokenVerifier` caught
+  `jwt.DecodeError` but not its siblings under `jwt.InvalidTokenError`, so a token
+  with a future `nbf` (`ImmatureSignatureError`) or one signed with an algorithm
+  outside `algorithms` (`InvalidAlgorithmError`) escaped the verifier uncaught and
+  surfaced as an unhandled 500. Both are now converted to `TokenDecodeError` and
+  rendered as 401, matching every other invalid-token path.
 
-## Breaking changes
+  This was never an authentication bypass — such tokens were always rejected. The
+  impact was the status class: any unauthenticated caller could trigger a 500 on a
+  protected route, which pollutes error tracking and, with `debug=True`, returned a
+  stack trace. Note the wrong-algorithm case is the shape of an *alg confusion*
+  probe; the verifier already refused it correctly because it pins `algorithms`.
 
-- Removed the unused `OIDCDiscoveryError` exception and
-  `KeycloakConfig.discovery_url` property. Endpoint URLs are derived from
-  `server_url` + `realm`; the plugin does not fetch the OIDC discovery document.
-  If you caught `OIDCDiscoveryError`, catch `JWKSFetchError` /
-  `KeycloakBackendError` instead.
+  `jwt.InvalidKeyError` is deliberately still uncaught: a broken JWKS key is a
+  server-side fault, not a bad client token.
 
-## Migration
+- **`MockKeycloakPlugin` no longer raises on app shutdown.** The testing helper set
+  only `_config`, `_jwks_cache`, and `_verifier`, but the inherited `_on_shutdown`
+  closes `self._http` — so exiting a `TestClient` context raised
+  `AttributeError: '_MockPlugin' object has no attribute '_http'`. It now
+  constructs a `KeycloakHttpClient`, which is never used (the JWKS cache is
+  in-memory) and whose `close()` no-ops when no session was opened. This affected
+  anyone following `docs/guides/testing.md`.
 
-- Remove any imports of `OIDCDiscoveryError` or uses of `config.discovery_url`.
-- Existing SPA / Bearer usage is unchanged — `callback_response_mode` defaults to
-  `"json"`.
-- For a server-rendered session flow, set `callback_response_mode="redirect"` and
-  add Litestar session middleware (`ServerSideSessionConfig`).
+## Tests
+
+- Coverage raised from 98% to **99%**; `models.py`, `routes.py`, and `token.py` are
+  now at 100%. 177 unit tests and 20 integration tests.
+- New regression tests for both fixes above, each verified to fail against the
+  unfixed code.
+- New integration tests: token expiry against real Keycloak (via a short-lived
+  client), scope guards against real token scopes, and logout invalidating the
+  refresh token.
+- `TESTING.md` rewritten to describe the suite as built, including its deliberate
+  non-goals (no token revocation checking, no OIDC discovery).
+
+## Upgrading
+
+No API or configuration changes. If you assert on status codes for malformed
+tokens, expect 401 where you previously saw 500.
