@@ -330,3 +330,25 @@ def test_has_scope_returns_false_for_absent_scope():
     """has_scope returns False when token does not have the scope."""
     user = KeycloakUser(sub="u1", scopes=frozenset({"openid"}))
     assert user.has_scope("profile") is False
+
+
+def test_from_claims_sub_fallback_to_preferred_username():
+    """Providers that omit sub from access tokens fall back to preferred_username."""
+    payload = TokenPayload.from_claims(
+        {
+            "iss": "http://kc/realms/r",
+            "aud": "app",
+            "exp": 2000,
+            "iat": 1000,
+            "preferred_username": "alice",
+        }
+    )
+    assert payload.sub == "alice"
+
+
+def test_from_claims_sub_empty_when_no_fallback_available():
+    """Neither sub nor preferred_username present yields an empty sub."""
+    payload = TokenPayload.from_claims(
+        {"iss": "http://kc/realms/r", "aud": "app", "exp": 2000, "iat": 1000}
+    )
+    assert payload.sub == ""

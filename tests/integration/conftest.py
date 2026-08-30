@@ -68,17 +68,28 @@ def keycloak_config(keycloak_container) -> KeycloakConfig:
     )
 
 
-def obtain_token(base_url: str, username: str, password: str) -> dict[str, Any]:
+def obtain_token(
+    base_url: str,
+    username: str,
+    password: str,
+    *,
+    client_id: str = "test-app",
+    client_secret: str = "test-secret",
+    scope: str | None = None,
+) -> dict[str, Any]:
     """Direct grant (resource owner password) — only for tests."""
-    data = urllib.parse.urlencode(
-        {
-            "grant_type": "password",
-            "client_id": "test-app",
-            "client_secret": "test-secret",
-            "username": username,
-            "password": password,
-        }
-    ).encode()
+    form = {
+        "grant_type": "password",
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "username": username,
+        "password": password,
+    }
+    # Omitted entirely rather than sent empty: Keycloak treats an empty scope as
+    # a request for no scopes, dropping even the default ones.
+    if scope is not None:
+        form["scope"] = scope
+    data = urllib.parse.urlencode(form).encode()
 
     req = urllib.request.Request(
         f"{base_url}/realms/test-realm/protocol/openid-connect/token",
@@ -106,6 +117,19 @@ def admin_token(keycloak_container) -> str:
     logger.debug("Obtaining token for testadmin...")
     result = obtain_token(keycloak_container.get_url(), "testadmin", "testpass")
     logger.debug("Got admin token (expires_in=%s)", result.get("expires_in"))
+    return result["access_token"]
+
+
+@pytest.fixture
+def shortlived_token(keycloak_container) -> str:
+    """Access token from the ``test-shortlived`` client (access.token.lifespan=1)."""
+    result = obtain_token(
+        keycloak_container.get_url(),
+        "testuser",
+        "testpass",
+        client_id="test-shortlived",
+        client_secret="shortlived-secret",
+    )
     return result["access_token"]
 
 

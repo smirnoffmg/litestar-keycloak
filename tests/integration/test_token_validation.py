@@ -1,5 +1,8 @@
 """Integration tests: token validation against real Keycloak."""
 
+import dataclasses
+import time
+
 import pytest
 from litestar import Litestar, get
 from litestar.testing import TestClient
@@ -77,4 +80,25 @@ def test_token_from_wrong_realm_returns_401(keycloak_config):
     )
     with TestClient(_app(keycloak_config)) as client:
         resp = client.get("/me", headers={"Authorization": f"Bearer {wrong_token}"})
+    assert resp.status_code == 401
+
+
+@pytest.mark.integration
+@pytest.mark.timeout(120)
+def test_expired_token_returns_401(keycloak_config, shortlived_token):
+    """A token past its exp is rejected with 401."""
+    # The shortlived_token fixture uses a client with access.token.lifespan=1, so
+    # expiry is testable without waiting out the realm-wide 5 minute default.
+    config = dataclasses.replace(
+        keycloak_config,
+        client_id="test-shortlived",
+        client_secret="shortlived-secret",
+    )
+
+    time.sleep(2)
+
+    with TestClient(_app(config)) as client:
+        resp = client.get(
+            "/me", headers={"Authorization": f"Bearer {shortlived_token}"}
+        )
     assert resp.status_code == 401

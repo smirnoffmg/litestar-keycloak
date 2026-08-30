@@ -1,10 +1,11 @@
 """Unit tests for auth middleware (token extraction, excluded paths)."""
 
 import time
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from litestar import Litestar, get
+from litestar import Litestar, Request, get
 from litestar.testing import TestClient
 
 from litestar_keycloak import KeycloakPlugin
@@ -98,6 +99,14 @@ async def _me() -> dict:
     return {"me": True}
 
 
+@get("/health-state")
+async def _health_state(request: Request[Any, Any, Any]) -> dict:
+    return {
+        "token": TOKEN_STATE_KEY in request.state,
+        "raw_token": RAW_TOKEN_STATE_KEY in request.state,
+    }
+
+
 def _plugin_app(**config_kwargs) -> Litestar:
     config = KeycloakConfig(
         server_url="http://localhost:8080",
@@ -106,7 +115,14 @@ def _plugin_app(**config_kwargs) -> Litestar:
         **config_kwargs,
     )
     return Litestar(
-        route_handlers=[_health, _health_secret, _public_data, _open, _me],
+        route_handlers=[
+            _health,
+            _health_secret,
+            _public_data,
+            _open,
+            _me,
+            _health_state,
+        ],
         plugins=[KeycloakPlugin(config)],
     )
 
@@ -124,6 +140,15 @@ def test_excluded_path_is_anchored_not_prefix():
     app = _plugin_app(excluded_paths=frozenset({"/health"}))
     with TestClient(app) as client:
         assert client.get("/health-secret").status_code == 401
+
+
+def test_excluded_path_does_not_set_state_keys():
+    """Auth never runs on an excluded path, so it leaves no token on the state."""
+    app = _plugin_app(excluded_paths=frozenset({"/health-state"}))
+    with TestClient(app) as client:
+        resp = client.get("/health-state")
+    assert resp.status_code == 200
+    assert resp.json() == {"token": False, "raw_token": False}
 
 
 def test_exclude_pattern_covers_a_subtree():

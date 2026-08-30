@@ -1,5 +1,7 @@
 """Integration tests: OIDC routes (refresh, logout) with real Keycloak."""
 
+import dataclasses
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -62,3 +64,30 @@ def test_valid_user_token_after_refresh(keycloak_config, user_token_response):
         resp = client.get("/me", headers={"Authorization": f"Bearer {new_access}"})
     assert resp.status_code == 200
     assert "sub" in resp.json()
+
+
+@pytest.mark.integration
+@pytest.mark.timeout(120)
+def test_logout_invalidates_refresh_token(keycloak_config, user_token_response):
+    """After /auth/logout the refresh token is rejected by Keycloak.
+
+    Access tokens stay valid until exp (validation is offline, see TESTING.md
+    non-goals) — the refresh token is the part logout actually revokes.
+    """
+    refresh_token = user_token_response["refresh_token"]
+    config = dataclasses.replace(
+        keycloak_config,
+        include_routes=True,
+        redirect_uri="http://localhost:8000/auth/callback",
+        cookie_secure=False,  # the TestClient runs over http://testserver
+    )
+
+    app = Litestar(route_handlers=[], plugins=[KeycloakPlugin(config)])
+    with TestClient(app) as client:
+        resp = client.post("/auth/logout", json={"refresh_token": refresh_token})
+    assert resp.status_code == 201
+    assert resp.json() == {"status": "logged_out"}
+
+    with pytest.raises(urllib.error.HTTPError) as exc_info:
+        _refresh_tokens(keycloak_config, refresh_token)
+    assert exc_info.value.code == 400

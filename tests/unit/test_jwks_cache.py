@@ -209,3 +209,25 @@ async def test_fetch_jwks_network_error_wrapped_as_jwks_fetch_error():
             await cache._fetch_jwks()
     finally:
         await http.close()
+
+
+async def test_enc_key_is_parsed_with_rs256():
+    """A key marked use=enc still parses — same RSA material, forced to RS256."""
+    key = _make_jwk_dict("enc-kid")
+    key["use"] = "enc"
+    cache = JWKSCache("http://example.com/jwks", ttl=3600, http=KeycloakHttpClient(10))
+    with patch.object(
+        cache, "_fetch_jwks", new_callable=AsyncMock, return_value={"keys": [key]}
+    ):
+        assert await cache.get_key("enc-kid") is not None
+
+
+async def test_non_signing_alg_key_is_parsed_with_rs256():
+    """A key advertising a non-signing alg is coerced to RS256 rather than dropped."""
+    key = _make_jwk_dict("wrap-kid")
+    key["alg"] = "RSA-OAEP"
+    cache = JWKSCache("http://example.com/jwks", ttl=3600, http=KeycloakHttpClient(10))
+    with patch.object(
+        cache, "_fetch_jwks", new_callable=AsyncMock, return_value={"keys": [key]}
+    ):
+        assert await cache.get_key("wrap-kid") is not None

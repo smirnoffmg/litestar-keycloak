@@ -1,371 +1,198 @@
-# Testing Plan: litestar-keycloak
+# Testing: litestar-keycloak
+
+How the test suite is organised, what it covers, and what it deliberately does not.
 
 ## Overview
 
-Two test layers, same principle across both: **unit tests prove the logic, integration tests prove the wiring.**
+Two layers, one principle: **unit tests prove the logic, integration tests prove the wiring.**
 
-| Layer       | Runner                  | Marker                     | Dependencies                        |
-| ----------- | ----------------------- | -------------------------- | ----------------------------------- |
-| Unit        | `pytest` (default)      | unmarked                   | None — mock JWKSCache, fake JWTs    |
-| Integration | `pytest -m integration` | `@pytest.mark.integration` | Keycloak container (testcontainers) |
+| Layer       | Runner                  | Marker                     | Dependencies                        | Runtime |
+| ----------- | ----------------------- | -------------------------- | ----------------------------------- | ------- |
+| Unit        | `pytest` (default)      | unmarked                   | None — fake JWTs, in-memory JWKS    | ~2s     |
+| Integration | `pytest -m integration` | `@pytest.mark.integration` | Keycloak container (testcontainers) | ~60s+   |
 
-Current state: **45 tests** across 7 files. Coverage is solid on the happy paths but thin on edge cases, error responses, and several modules have zero dedicated tests.
+Current state: **197 tests across 18 files** — 177 unit, 20 integration — at **99% coverage**.
 
+Integration tests are **excluded by default** (`addopts = "-m 'not integration'"`), so a bare
+`pytest` is always the fast path. `asyncio_mode = "auto"` means `async def test_*` needs no
+marker. Litestar deprecation warnings are promoted to errors via `filterwarnings`.
 
-## Current Coverage Map
-
-| Module            | Unit tests | Integration tests | Assessment                                        |
-| ----------------- | ---------- | ----------------- | ------------------------------------------------- |
-| `config.py`       | **0**      | 0                 | Missing — validation logic untested               |
-| `models.py`       | **0**      | 0                 | Missing — `from_claims`, `from_token`, properties |
-| `exceptions.py`   | **0**      | 0                 | Missing — exception handlers untested             |
-| `token.py`        | 9          | 1                 | Good on verification, missing JWKSCache logic     |
-| `auth.py`         | 6          | 0                 | Good on extraction, missing edge cases            |
-| `guards.py`       | 11         | 0                 | Good                                              |
-| `dependencies.py` | **0**      | 0                 | Missing — providers never tested directly         |
-| `plugin.py`       | 6          | 0                 | Good on registration, missing override tests      |
-| `routes.py`       | 6          | 0                 | Fair — mostly mock-based, real flow untested      |
-| End-to-end        | 0          | 3                 | Thin — only `/me` with user/admin tokens          |
-
-
-## Test Plan by Module
-
-### 1. `config.py` — 0 existing, 10 needed
-
-Validation in `__post_init__` and derived properties are completely untested.
-
-**Unit tests:**
+## Layout
 
 ```
-test_minimal_config_requires_server_url_realm_client_id
-test_frozen_config_rejects_mutation
-test_include_routes_without_redirect_uri_raises_value_error
-test_negative_jwks_cache_ttl_raises_value_error
-test_zero_http_timeout_raises_value_error
-test_realm_url_strips_trailing_slash
-test_discovery_url_derived_correctly
-test_jwks_url_derived_correctly
-test_authorization_url_derived_correctly
-test_token_url_derived_correctly
-test_logout_url_derived_correctly
-test_effective_audience_defaults_to_client_id
-test_effective_audience_uses_explicit_override
-test_default_values_are_sensible
+tests/
+├── conftest.py                 # public testing API: create_test_token, MockKeycloakPlugin
+├── test_plugin.py              # plugin registration (drives on_app_init directly)
+├── test_routes.py              # OIDC routes with mocked Keycloak calls
+├── test_testing_api.py         # the public helpers in conftest.py (nothing else uses them)
+├── fixtures/realm-export.json  # realm imported by the container
+├── unit/
+│   ├── conftest.py             # RSA keypair, JWKS double, make_token factory
+│   └── test_{auth,config,dependencies,exceptions,guards,http_client,jwks_cache,models,token}.py
+└── integration/
+    ├── conftest.py             # Keycloak container, config, token fixtures
+    └── test_{guards_integration,jwks_refresh,oidc_flow,routes_integration,scenarios,token_validation}.py
 ```
 
-Priority: **high** — config validation is the first line of defense against misconfiguration.
-
-
-### 2. `models.py` — 0 existing, 14 needed
-
-Both dataclasses and their factory methods are untested.
-
-**Unit tests — `TokenPayload`:**
-
-```
-test_from_claims_maps_standard_oidc_fields
-test_from_claims_maps_keycloak_specific_fields
-test_from_claims_puts_unknown_keys_in_extra
-test_from_claims_handles_minimal_claims (only required fields)
-test_realm_roles_extracts_from_realm_access
-test_realm_roles_returns_empty_frozenset_when_missing
-test_client_roles_extracts_from_resource_access
-test_client_roles_returns_empty_frozenset_for_unknown_client
-test_scopes_splits_space_delimited_string
-test_scopes_returns_empty_frozenset_for_empty_string
-test_expires_at_returns_utc_datetime
-test_issued_at_returns_utc_datetime
-```
-
-**Unit tests — `KeycloakUser`:**
-
-```
-test_from_token_maps_all_identity_fields
-test_from_token_normalizes_realm_roles_to_frozenset
-test_from_token_normalizes_client_roles_per_client
-test_from_token_preserves_raw_payload
-test_has_role_returns_true_for_present_role
-test_has_role_returns_false_for_absent_role
-test_has_client_role_checks_correct_client
-test_has_client_role_returns_false_for_unknown_client
-test_has_scope_returns_true_for_present_scope
-test_has_scope_returns_false_for_absent_scope
-```
-
-Priority: **high** — these are the core data structures everything else relies on.
-
-
-### 3. `exceptions.py` — 0 existing, 8 needed
-
-Exception construction and handler responses.
-
-**Unit tests — exception classes:**
-
-```
-test_missing_token_error_stores_location
-test_invalid_issuer_error_stores_expected_and_got
-test_invalid_audience_error_stores_expected_and_got
-test_insufficient_role_error_computes_missing_roles_in_message
-test_insufficient_scope_error_computes_missing_scopes_in_message
-test_all_exceptions_inherit_from_keycloak_error
-```
-
-**Unit tests — exception handlers:**
-
-```
-test_authentication_error_handler_returns_401_json
-test_authorization_error_handler_returns_403_json
-test_backend_error_handler_returns_502_json
-test_handler_does_not_leak_stack_trace
-```
-
-Priority: **medium** — the exceptions are simple, but the handlers are part of the public contract.
-
-
-### 4. `token.py` — 9 existing, 9 needed
-
-`TokenVerifier` is well-covered. `JWKSCache` has zero direct tests.
-
-**Unit tests — `JWKSCache`:**
-
-```
-test_warm_populates_cache
-test_get_key_returns_cached_key_without_refetch
-test_get_key_refreshes_on_ttl_expiry
-test_get_key_refreshes_on_unknown_kid
-test_get_key_raises_after_refresh_if_kid_still_missing
-test_concurrent_refreshes_only_fetch_once (double-check pattern)
-test_ttl_zero_always_refetches
-test_fetch_failure_raises_jwks_fetch_error
-test_malformed_jwks_response_skips_bad_keys
-```
-
-These require mocking `_fetch_jwks` or injecting a fake aiohttp response. The double-check / concurrent refresh test is the most important — it validates the `asyncio.Lock` pattern.
-
-Priority: **high** — the cache is the only stateful component in the hot path.
-
-
-### 5. `auth.py` — 6 existing, 4 needed
-
-Good extraction coverage. Missing edge cases.
-
-**Unit tests:**
-
-```
-test_bearer_case_insensitive (e.g. "bearer", "BEARER", "Bearer")
-test_extra_whitespace_in_authorization_header
-test_excluded_path_does_not_set_state_keys
-test_verifier_exception_propagates_unchanged
-```
-
-Priority: **low** — existing tests cover the critical paths.
-
-
-### 6. `guards.py` — 11 existing, 3 needed
-
-Well-covered. Minor gaps.
-
-**Unit tests:**
-
-```
-test_require_roles_with_superset_of_roles_passes
-test_require_client_roles_all_strategy_missing_one_raises
-test_empty_roles_argument_passes_any_user
-```
-
-Priority: **low** — existing 11 tests are thorough.
-
-
-### 7. `dependencies.py` — 0 existing, 3 needed
-
-Never tested. Thin but important — these are the DI wiring contract.
-
-**Unit tests:**
-
-```
-test_provide_current_user_returns_connection_user
-test_provide_token_payload_returns_state_value
-test_provide_raw_token_returns_state_value
-```
-
-Priority: **medium** — if the DI wiring breaks, every handler breaks.
-
-
-### 8. `plugin.py` — 6 existing, 4 needed
-
-Registration is tested. Override behavior and startup lifecycle are not.
-
-**Unit tests:**
-
-```
-test_user_exception_handler_overrides_plugin_default
-test_user_dependency_overrides_plugin_default
-test_on_startup_calls_jwks_warm
-test_middleware_inserted_at_position_zero
-```
-
-Priority: **medium**.
-
-
-### 9. `routes.py` — 6 existing, 6 needed
-
-Current tests are mock-heavy. Some real flow gaps.
-
-**Unit tests:**
-
-```
-test_login_includes_scopes_from_config
-test_login_state_is_cryptographically_random
-test_logout_clears_session_even_when_keycloak_call_fails
-test_refresh_forwards_correct_grant_type
-test_callback_calls_exchange_with_correct_code
-test_callback_returns_full_token_response
-```
-
-Priority: **medium** — routes are optional but security-sensitive when enabled.
-
-
-### 10. Integration Tests — 3 existing, 12 needed
-
-Currently only tests `/me` with valid/missing tokens. Needs real Keycloak flows.
-
-**Token validation against real Keycloak:**
-
-```
-test_valid_user_token_returns_200_with_user_claims
-test_valid_admin_token_includes_admin_role
-test_expired_token_returns_401
-test_token_from_wrong_realm_returns_401
-test_revoked_token_returns_401 (logout then reuse)
-test_tampered_token_signature_returns_401
-```
-
-**Guards against real tokens:**
-
-```
-test_admin_guard_allows_admin_token
-test_admin_guard_rejects_user_token_with_403
-test_scope_guard_validates_real_token_scopes
-```
-
-**JWKS lifecycle:**
-
-```
-test_jwks_warm_on_startup_fetches_real_keys
-test_app_handles_keycloak_restart_gracefully (stop/start container)
-```
-
-**Routes (real Keycloak):**
-
-```
-test_full_authorization_code_flow (login redirect -> callback -> tokens)
-test_refresh_with_real_refresh_token
-test_logout_invalidates_refresh_token
-```
-
-Priority: **high** — integration tests are the only way to catch real Keycloak behavior differences.
-
-
-### 11. Realm Export Enhancements
-
-The current `realm-export.json` needs additions to support the full test plan:
-
-```diff
- "clients": [
-   {
-     "clientId": "test-app",
-+    "defaultClientScopes": ["openid", "profile", "email"],
-+    "optionalClientScopes": ["reports"]
--  }
-+  },
-+  {
-+    "clientId": "test-service",
-+    "enabled": true,
-+    "publicClient": false,
-+    "secret": "service-secret",
-+    "serviceAccountsEnabled": true
-+  }
- ],
- "roles": {
-   "realm": [
-     { "name": "admin" },
-     { "name": "user" }
--  ]
-+  ],
-+  "client": {
-+    "test-service": [
-+      { "name": "read" },
-+      { "name": "write" }
-+    ]
-+  }
- },
- "users": [
-+  {
-+    "username": "testnorolesuser",
-+    "enabled": true,
-+    "credentials": [{ "type": "password", "value": "testpass", "temporary": false }],
-+    "realmRoles": []
-+  }
- ]
-```
-
-This adds: a second client for client-role testing, client-level roles, scopes, a service account, and a user with no roles.
-
-
-## Test Execution Strategy
-
-### Local development
+`tests/unit/` and `tests/integration/` have no `__init__.py`, so **cross-file imports between
+test modules do not work** — shared helpers belong in the nearest `conftest.py` (as fixtures)
+or are duplicated locally. Note `test_plugin.py` and `test_routes.py` sit at the top level
+rather than under `unit/`, though they are unit tests.
+
+## Coverage
+
+Measured with `uv run pytest --cov=litestar_keycloak --cov-report=term-missing` (unit only).
+
+| Module            | Tests | Coverage | Uncovered |
+| ----------------- | ----- | -------- | --------- |
+| `__init__.py`     | —     | 100%     | |
+| `auth.py`         | 15    | 100%     | |
+| `config.py`       | 24    | 100%     | |
+| `dependencies.py` | 4     | 82%      | `39-42` — litestar < 2.23 import shim |
+| `exceptions.py`   | 10    | 100%     | |
+| `guards.py`       | 17    | 100%     | |
+| `http_client.py`  | 7     | 97%      | `31->33` — lock double-check branch |
+| `models.py`       | 25    | 100%     | |
+| `plugin.py`       | 13    | 100%     | |
+| `routes.py`       | 26    | 100%     | |
+| `token.py`        | 23    | 100%     | |
+| **Total**         | 177   | **99%**  | |
+
+There is no `fail_under` threshold; `--cov` is not in `addopts`, so coverage runs only when
+asked for.
+
+## Fixtures
+
+### `tests/conftest.py` — the public testing API
+
+Documented in `docs/guides/testing.md` for **downstream users** of the package. `tests/
+test_testing_api.py` is the only thing exercising them — it exists because a regression here
+(the plugin raising on shutdown) was otherwise invisible to the suite. Keep the signatures
+stable, and keep that file passing.
+
+- `create_test_token(sub, realm_roles, exp_offset, iss, aud, typ, headers, **extra_claims)` —
+  mints a JWT signed with a fixed module-level RSA key.
+- `MockKeycloakPlugin(server_url, realm, client_id, **kwargs)` — a `KeycloakPlugin` whose JWKS
+  cache serves that same key, so apps can be tested with no Keycloak running.
+- Exposed as fixtures `create_test_token_factory` / `mock_keycloak_plugin_factory`.
+
+### `tests/unit/conftest.py`
+
+| Fixture | Scope | Provides |
+| --- | --- | --- |
+| `rsa_keypair` | session | 2048-bit RSA `(private, public)` |
+| `test_jwk` | session | `PyJWK` for the public key, kid `test-kid` |
+| `mock_jwks_cache` | function | `MockJWKSCache` duck-typed as `JWKSCache` |
+| `keycloak_config` | function | config for `http://localhost:8080`, realm `test-realm`, client `test-app` |
+| `token_verifier` | function | `TokenVerifier` wired to the two above |
+| `make_token` | function | JWT factory matching that issuer/audience |
+
+Signatures are **really verified** — only the JWKS lookup is doubled, never the crypto.
+`make_token` passes `iss`/`aud` overrides through `**extra_claims`, and `headers={}` yields a
+token with no `kid`.
+
+### `tests/integration/conftest.py`
+
+| Fixture | Scope | Provides |
+| --- | --- | --- |
+| `keycloak_container` | session | started `quay.io/keycloak/keycloak:26.0` with the realm imported |
+| `keycloak_config` | session | config pointed at the mapped random port |
+| `user_token` / `admin_token` | function | access token for `testuser` / `testadmin` |
+| `user_token_response` | function | full token dict, including `refresh_token` |
+| `shortlived_token` | function | token from `test-shortlived` (expires in 1s) |
+
+The container start is gated twice: `kc.start()`, then an `HttpWaitStrategy` polling the realm's
+`.well-known/openid-configuration` for a 200 (120s timeout). A malformed `realm-export.json`
+therefore fails as a **timeout on every integration test**, not as a clear parse error — check
+the realm file first when the whole layer goes red at once.
+
+Module-level `obtain_token(base_url, username, password, *, client_id, client_secret, scope)`
+does a direct grant (test-only).
+
+### Realm contents (`tests/fixtures/realm-export.json`)
+
+**Clients** — `test-app` (secret `test-secret`, direct grant + standard flow, default scopes
+`openid profile email roles`), `test-service` (secret `service-secret`, service account, client
+roles `read`/`write`), `test-shortlived` (secret `shortlived-secret`, `access.token.lifespan=1`).
+
+**Realm roles** — `admin`, `user`.
+
+> **Do not add a top-level `clientScopes` array to this file.** Keycloak treats it as the
+> realm's complete scope list rather than an addition, which drops the built-in `roles` scope
+> and silently strips `realm_access.roles` from every token — every role assertion in the suite
+> then fails on an empty list. Scope tests use the scopes Keycloak already issues.
+
+**Users** (all password `testpass`) — `testuser` (`user`), `testadmin` (`admin`, `user`),
+`testnorolesuser` (none — currently unused by any test).
+
+`compose.test.yml` runs the same realm on a fixed `localhost:8080` for manual poking.
+
+## Non-goals
+
+Deliberate design limits. Do not write tests asserting the opposite — they cannot pass.
+
+**No token revocation checking.** `TokenVerifier.verify` validates entirely offline: JWKS
+signature plus the `typ`, `iss`, `aud`, `exp` claims. There is no introspection call anywhere in
+the package. **An access token remains valid after logout until its `exp`** — the standard
+stateless-JWT tradeoff. Refresh tokens *are* validated server-side by Keycloak, so logout does
+invalidate those; that is what `test_logout_invalidates_refresh_token` covers. Applications
+needing immediate revocation should shorten `access.token.lifespan` or add introspection.
+
+**No OIDC discovery.** Endpoint URLs are derived directly from `server_url` + `realm` in
+`config.py`; `.well-known/openid-configuration` is never fetched. There is no `discovery_url`.
+
+**The auth middleware is appended, not prepended.** `plugin.py:on_app_init` appends it so it
+runs *after* app-level session middleware — required for `callback_response_mode="redirect"`,
+where the token is read out of the session. `test_middleware_appended_after_existing` locks
+this in.
+
+## Known gaps
+
+- `dependencies.py:39-42` — the `except ImportError` shim for litestar < 2.23. Unreachable on
+  the installed version without faking the import failure; this is the whole reason that
+  module sits at 82%.
+- `http_client.py:31->33` — the inner half of the double-checked lock in `_get_session`, i.e.
+  the branch where another coroutine created the session first. Not deterministically
+  triggerable without instrumenting the lock.
+- Keycloak restart / key-rotation resilience is covered only at unit level
+  (`test_get_key_refreshes_on_unknown_kid`). A container restart would remap the host port and
+  invalidate the session-scoped `keycloak_config` for every other test, so it is not tested
+  end-to-end.
+
+## Running
 
 ```bash
-# fast feedback — unit tests only (default)
-pytest
+make check              # ruff check + ruff format --check + mypy src/ + unit tests
+make test-unit          # unit only (the pytest default)
+make test-integration   # -m integration --timeout=120; needs Docker
+make test               # both
+make test-examples      # ./examples/test.sh against a running app
 
-# full suite including container
-pytest -m integration
-
-# single module
-pytest tests/unit/test_token.py -v
+uv run pytest tests/unit/test_token.py -v                    # one module
+uv run pytest -m integration -o log_cli=true -o log_cli_level=INFO   # container logs
 ```
 
-### CI pipeline
+## CI
 
-```yaml
-jobs:
-  unit:
-    runs-on: ubuntu-latest
-    steps:
-      - run: uv run pytest --cov=litestar_keycloak --cov-report=xml
+`.github/workflows/ci.yml` runs two jobs:
 
-  integration:
-    runs-on: ubuntu-latest
-    steps:
-      - run: uv run pytest -m integration --timeout=120
-```
+- **`lint-and-test`** — ruff check, ruff format check, mypy, then
+  `uv run pytest --cov --cov-report=xml` (unit only, via `addopts`), with a conditional
+  Codecov upload.
+- **`integration-tests`** — `uv run pytest -m integration -v --timeout=120` on a
+  Docker-enabled runner.
 
-Unit and integration run as separate jobs. Unit is fast (~2s), gates merge. Integration is slow (~60s container startup), runs in parallel, non-blocking on PRs initially.
+`build-docs` / `deploy-pages` gate on both. `publish.yml` re-runs lint + unit tests before
+building the package. The pre-commit hook runs `uv run pytest -m "not integration"` on every
+commit.
 
-### Coverage targets
+## Conventions
 
-| Module            | Current (est.)        | Target |
-| ----------------- | --------------------- | ------ |
-| `config.py`       | 0%                    | 95%    |
-| `models.py`       | 0%                    | 95%    |
-| `exceptions.py`   | ~30% (hit indirectly) | 90%    |
-| `token.py`        | ~70%                  | 90%    |
-| `auth.py`         | ~80%                  | 90%    |
-| `guards.py`       | ~90%                  | 95%    |
-| `dependencies.py` | 0%                    | 90%    |
-| `plugin.py`       | ~60%                  | 85%    |
-| `routes.py`       | ~50%                  | 80%    |
-
-
-## Priority Summary
-
-| Priority | Tests to add                                     | Effort   |
-| -------- | ------------------------------------------------ | -------- |
-| **P0**   | `config`, `models`, `JWKSCache` unit tests       | ~2 hours |
-| **P1**   | Integration tests (real Keycloak flows, guards)  | ~3 hours |
-| **P2**   | `exceptions`, `dependencies`, `plugin` overrides | ~1 hour  |
-| **P3**   | `routes` edge cases, `auth` minor gaps           | ~1 hour  |
-
-P0 + P1 bring the most confidence per hour invested. P0 catches logic bugs without a container. P1 catches the Keycloak-specific behaviors that no mock can reproduce.
+- `litestar.testing.TestClient` used synchronously as a context manager — the suite uses
+  neither `AsyncTestClient` nor `create_test_client`.
+- No `pytest.mark.parametrize` anywhere; tests are written out individually.
+- Unit tests mock only at system boundaries: the JWKS cache, `aiohttp.ClientSession`, or the
+  module-level `_exchange_code` / `_refresh_token` / `_keycloak_logout` helpers.
+- Integration tests mock nothing.
+- Every integration test carries `@pytest.mark.integration` and, in most files,
+  `@pytest.mark.timeout(120)` to override the global 30s cap.

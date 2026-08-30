@@ -13,6 +13,7 @@ from jwt import PyJWK
 
 from litestar_keycloak.config import KeycloakConfig
 from litestar_keycloak.exceptions import JWKSFetchError
+from litestar_keycloak.http_client import KeycloakHttpClient
 from litestar_keycloak.plugin import KeycloakPlugin
 from litestar_keycloak.token import TokenVerifier
 
@@ -113,6 +114,9 @@ def MockKeycloakPlugin(
             self._config = config
             self._jwks_cache = cache
             self._verifier = verifier
+            # Never used (the JWKS cache is in-memory) but _on_shutdown closes it;
+            # close() is a no-op when no session was ever opened.
+            self._http = KeycloakHttpClient(config.http_timeout)
 
     return _MockPlugin()
 

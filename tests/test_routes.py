@@ -451,6 +451,32 @@ def test_logout_redirect_mode_clears_session(app_redirect_mode):
     assert stored == {"access": None, "refresh": None}
 
 
+def test_logout_redirect_mode_redirects_to_post_logout_uri():
+    """redirect mode with post_logout_redirect_uri set returns a Redirect."""
+    config = _config_with_routes(
+        callback_response_mode="redirect",
+        post_logout_redirect_uri="/goodbye",
+    )
+    session_config = ServerSideSessionConfig()
+    app = Litestar(
+        route_handlers=[_session_debug, _me],
+        plugins=[KeycloakPlugin(config)],
+        middleware=[session_config.middleware],
+        stores={"sessions": MemoryStore()},
+    )
+    with (
+        patch("litestar_keycloak.routes._keycloak_logout", new_callable=AsyncMock),
+        TestClient(app) as client,
+    ):
+        _complete_login(client, {"access_token": "at", "refresh_token": "rt"})
+        resp = client.post("/auth/logout", follow_redirects=False)
+        stored = client.get("/debug/session").json()
+
+    assert resp.status_code in (301, 302, 303, 307, 308)
+    assert resp.headers["location"] == "/goodbye"
+    assert stored == {"access": None, "refresh": None}
+
+
 # --- aiohttp token/logout helpers (exercised via fake session) ---
 
 

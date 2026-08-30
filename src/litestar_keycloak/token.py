@@ -203,7 +203,11 @@ class TokenVerifier:
             )
         except jwt.ExpiredSignatureError as exc:
             raise TokenExpiredError(str(exc)) from exc
-        except jwt.DecodeError as exc:
+        except jwt.InvalidTokenError as exc:
+            # Base of DecodeError, ImmatureSignatureError, InvalidAlgorithmError and
+            # friends — catching only DecodeError let the rest escape as a 500 for
+            # what is really a bad client token.  InvalidKeyError is deliberately
+            # not caught: a broken JWKS key is a server-side fault.
             raise TokenDecodeError(str(exc)) from exc
 
     def _validate_claims(self, claims: dict[str, Any]) -> None:

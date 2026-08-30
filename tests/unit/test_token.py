@@ -1,7 +1,9 @@
 """Unit tests for TokenVerifier and token validation."""
 
 import dataclasses
+import time
 
+import jwt
 import pytest
 
 from litestar_keycloak.exceptions import (
@@ -169,3 +171,66 @@ async def test_verify_typ_check_disabled_allows_id_token(
     token = make_token(sub="user-2", typ="ID")
     payload = await verifier.verify(token)
     assert payload.sub == "user-2"
+
+
+# -- regression: the InvalidTokenError family must map to 401, not escape as 500 --
+
+
+async def test_verify_nbf_in_future_raises_token_decode_error(
+    token_verifier, make_token
+):
+    """A not-yet-valid token is a client error, not an unhandled 500.
+
+    ImmatureSignatureError sits beside DecodeError under InvalidTokenError, so
+    catching only DecodeError let it escape the verifier uncaught.
+    """
+    token = make_token(nbf=int(time.time()) + 3600)
+    with pytest.raises(TokenDecodeError):
+        await token_verifier.verify(token)
+
+
+async def test_verify_wrong_algorithm_raises_token_decode_error(
+    token_verifier, make_token
+):
+    """A token signed with an algorithm outside `algorithms` is rejected as 401.
+
+    This is the shape of an alg-confusion probe: PyJWT refuses it because the
+    verifier pins RS256, but it used to surface as InvalidAlgorithmError -> 500.
+    """
+    now = int(time.time())
+    token = jwt.encode(
+        {
+            "sub": "user-1",
+            "iss": "http://localhost:8080/realms/test-realm",
+            "aud": "test-app",
+            "iat": now,
+            "exp": now + 3600,
+            "typ": "Bearer",
+        },
+        "a" * 32,  # >=32 bytes: PyJWT warns on short HMAC keys
+        algorithm="HS256",
+        headers={"kid": "test-kid"},
+    )
+    with pytest.raises(TokenDecodeError):
+        await token_verifier.verify(token)
+
+
+async def test_verify_invalid_signature_raises_token_decode_error(
+    token_verifier, make_token
+):
+    """A token whose signature does not match the key is rejected."""
+    token = make_token()
+    head, payload, sig = token.split(".")
+    tampered = f"{head}.{payload}.{sig[:-4]}AAAA"
+    with pytest.raises(TokenDecodeError):
+        await token_verifier.verify(tampered)
+
+
+async def test_verify_empty_aud_falls_back_to_azp(
+    keycloak_config, mock_jwks_cache, make_token
+):
+    """A token with no aud is accepted when azp names an accepted audience."""
+    verifier = TokenVerifier(keycloak_config, mock_jwks_cache)
+    token = make_token(aud="", azp="test-app")
+    payload = await verifier.verify(token)
+    assert payload.azp == "test-app"

@@ -21,6 +21,16 @@
             "publicClient": false,
             "secret": "service-secret",
             "serviceAccountsEnabled": true
+        },
+        {
+            "clientId": "test-shortlived",
+            "enabled": true,
+            "publicClient": false,
+            "secret": "shortlived-secret",
+            "directAccessGrantsEnabled": true,
+            "attributes": {
+                "access.token.lifespan": "1"
+            }
         }
     ],
     "roles": {
