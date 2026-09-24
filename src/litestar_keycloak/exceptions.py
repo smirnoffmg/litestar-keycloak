@@ -9,12 +9,15 @@ by the plugin to translate these into proper HTTP 401/403 responses.
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any
 
 from litestar import MediaType, Response
 
 if TYPE_CHECKING:
     from litestar.connection import Request
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -136,7 +139,15 @@ def _error_response(status_code: int, detail: str) -> Response[dict[str, str]]:
 def _handle_authentication_error(
     _: Request[Any, Any, Any], exc: AuthenticationError
 ) -> Response[dict[str, str]]:
-    return _error_response(401, str(exc))
+    # The body stays generic so an unauthenticated caller does not learn the
+    # expected issuer, accepted audiences or library error text; the detail
+    # goes to the log instead.
+    if isinstance(exc, MissingTokenError):
+        return _error_response(401, str(exc))
+    logger.info("Authentication failed: %s: %s", type(exc).__name__, exc)
+    if isinstance(exc, TokenExpiredError):
+        return _error_response(401, "Token expired")
+    return _error_response(401, "Invalid token")
 
 
 def _handle_authorization_error(

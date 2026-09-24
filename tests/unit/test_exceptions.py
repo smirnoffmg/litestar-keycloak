@@ -1,6 +1,9 @@
 """Unit tests for exception classes and exception handlers."""
 
+import logging
 from unittest.mock import MagicMock
+
+import pytest
 
 from litestar_keycloak.exceptions import (
     AuthenticationError,
@@ -13,6 +16,8 @@ from litestar_keycloak.exceptions import (
     KeycloakBackendError,
     KeycloakError,
     MissingTokenError,
+    TokenDecodeError,
+    TokenExpiredError,
     exception_handlers,
 )
 
@@ -130,3 +135,60 @@ def test_handler_does_not_leak_stack_trace():
     content_str = str(content)
     assert "Traceback" not in content_str
     assert "  File " not in content_str
+
+
+@pytest.mark.parametrize(
+    ("exc", "leaked"),
+    [
+        (
+            InvalidIssuerError(
+                expected="https://kc/realms/r", got="https://evil/realms/r"
+            ),
+            ["kc/realms", "evil/realms"],
+        ),
+        (
+            InvalidAudienceError(expected="internal-a, internal-b", got="other"),
+            ["internal-a", "internal-b", "other"],
+        ),
+        (TokenDecodeError("Signature verification failed"), ["Signature"]),
+    ],
+)
+def test_authentication_error_handler_returns_generic_body(exc, leaked):
+    """Issuer, audience and decode failures return only "Invalid token"."""
+    response = exception_handlers[AuthenticationError](_mock_request(), exc)
+    assert response.status_code == 401
+    assert response.content == {"error": "Invalid token"}
+    for text in leaked:
+        assert text not in str(response.content)
+
+
+def test_authentication_error_handler_expired_token():
+    """An expired token returns "Token expired" without the library text."""
+    exc = TokenExpiredError("Signature has expired")
+    response = exception_handlers[AuthenticationError](_mock_request(), exc)
+    assert response.status_code == 401
+    assert response.content == {"error": "Token expired"}
+
+
+def test_authentication_error_handler_missing_token_keeps_message(caplog):
+    """A missing token keeps its message and is not logged."""
+    exc = MissingTokenError("header")
+    with caplog.at_level(logging.INFO, logger="litestar_keycloak.exceptions"):
+        response = exception_handlers[AuthenticationError](_mock_request(), exc)
+    assert response.status_code == 401
+    assert response.content == {"error": "No token found in header"}
+    assert not caplog.records
+
+
+def test_authentication_error_handler_logs_detail(caplog):
+    """The detailed reason is logged at INFO on the plugin logger."""
+    exc = InvalidIssuerError(
+        expected="https://kc/realms/r", got="https://evil/realms/r"
+    )
+    with caplog.at_level(logging.INFO, logger="litestar_keycloak.exceptions"):
+        exception_handlers[AuthenticationError](_mock_request(), exc)
+    [record] = caplog.records
+    assert record.levelno == logging.INFO
+    assert record.name == "litestar_keycloak.exceptions"
+    assert "InvalidIssuerError" in record.getMessage()
+    assert str(exc) in record.getMessage()

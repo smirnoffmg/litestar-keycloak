@@ -9,7 +9,8 @@ from litestar.middleware.session.server_side import ServerSideSessionConfig
 from litestar.stores.memory import MemoryStore
 from litestar.testing import TestClient
 
-from litestar_keycloak import KeycloakConfig, KeycloakPlugin
+from litestar_keycloak import KeycloakConfig, KeycloakPlugin, require_roles
+from tests.conftest import MockKeycloakPlugin, create_test_token
 
 
 def _config_with_routes(**kwargs):
@@ -518,3 +519,31 @@ async def test_keycloak_logout_posts_to_logout_url():
     url, data = http.post_calls[0]
     assert url == config.logout_url
     assert data["refresh_token"] == "rt-123"
+
+
+# -- error bodies a client receives --------------------------------------------
+
+
+@get("/admin", guards=[require_roles("admin")])
+async def _admin() -> dict:
+    return {"ok": True}
+
+
+def test_wrong_issuer_token_returns_generic_401():
+    """A wrong-issuer token gets a generic body that names no issuer."""
+    token = create_test_token(iss="http://evil.example.com/realms/test-realm")
+    app = Litestar(route_handlers=[_me], plugins=[MockKeycloakPlugin()])
+    with TestClient(app) as client:
+        resp = client.get("/me", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 401
+    assert resp.json() == {"error": "Invalid token"}
+
+
+def test_missing_role_keeps_403_detail():
+    """Authorization failures still name the missing role."""
+    token = create_test_token(realm_roles=["user"])
+    app = Litestar(route_handlers=[_admin], plugins=[MockKeycloakPlugin()])
+    with TestClient(app) as client:
+        resp = client.get("/admin", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 403
+    assert resp.json() == {"error": "Missing roles: admin"}

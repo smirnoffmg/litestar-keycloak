@@ -23,6 +23,36 @@ KeycloakConfig(
 
 Then both user tokens (aud/azp = `my-app`) and service tokens (azp = `my-service-client`) are valid.
 
+## Requiring the audience in `aud`: `strict_audience`
+
+By default the plugin falls back to `azp`. It accepts a token whose `aud` names another service, as long as `azp` is `my-app` or one of **optional_audiences**. Keycloak needs this fallback out of the box: it does not put the requesting client into the access token's `aud`, so a default-realm token often carries only `aud="account"`.
+
+The fallback also means a token that Keycloak issued for a different API passes your audience check. To accept only tokens that were issued for your API, set **strict_audience**:
+
+```python
+KeycloakConfig(
+    server_url="https://keycloak.example.com",
+    realm="my-realm",
+    client_id="my-app",
+    client_secret="...",
+    optional_audiences=frozenset({"my-service-client"}),
+    strict_audience=True,
+)
+```
+
+With `strict_audience=True` a token is accepted only if its `aud` (a string or a list) contains `my-app` or `my-service-client`. The `azp` claim is ignored. A token with no `aud` or an empty one is rejected with `401`.
+
+Before you enable it, make Keycloak put your API into `aud`. For every client that requests tokens for your API — the frontend client for user tokens, the service client for client_credentials tokens:
+
+1. In the Keycloak admin console, open **Clients** → the calling client → **Client scopes** → `<client-id>-dedicated`.
+2. Choose **Configure a new mapper** (or **Add mapper** → **By configuration**) and select **Audience** (provider id `oidc-audience-mapper`).
+3. Set **Included Client Audience** (`included.client.audience`) to your API's client ID, e.g. `my-app`. To add a value that is not a client ID, use **Included Custom Audience** instead.
+4. Turn **Add to access token** on and save.
+
+Then check a fresh token: its `aud` must contain `my-app`. In the admin console, **Client scopes** → **Evaluate** on the calling client shows the generated access token. Tokens issued before the change keep their old `aud` until they expire.
+
+We recommend enabling `strict_audience` once every calling client has the mapper. Keycloak describes the mapper in the Server Administration Guide, section "Hardcoded audience".
+
 ## Obtaining a service token (client_credentials)
 
 Outside the plugin you request a token from Keycloak's token endpoint:
