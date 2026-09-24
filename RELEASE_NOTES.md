@@ -1,47 +1,64 @@
-# v0.3.1
+# v0.3.2
 
-Patch release. Two bug fixes around token rejection and the testing helpers, plus
-a substantially expanded test suite.
+Patch release. Two hardening changes to how bearer tokens are rejected: 401
+response bodies no longer disclose validation details, and a new opt-in
+`strict_audience` setting stops accepting tokens that were issued for another API.
 
-## Bug fixes
+## Security
 
-- **Malformed tokens now return 401 instead of 500.** `TokenVerifier` caught
-  `jwt.DecodeError` but not its siblings under `jwt.InvalidTokenError`, so a token
-  with a future `nbf` (`ImmatureSignatureError`) or one signed with an algorithm
-  outside `algorithms` (`InvalidAlgorithmError`) escaped the verifier uncaught and
-  surfaced as an unhandled 500. Both are now converted to `TokenDecodeError` and
-  rendered as 401, matching every other invalid-token path.
+- **401 responses no longer reveal why a token was rejected.** The body used to
+  carry the exception text: the expected issuer and the one in the token, the full
+  list of accepted audiences (your internal client IDs), and PyJWT error messages.
+  Any unauthenticated caller could read them. The body is now one of three fixed
+  messages:
 
-  This was never an authentication bypass — such tokens were always rejected. The
-  impact was the status class: any unauthenticated caller could trigger a 500 on a
-  protected route, which pollutes error tracking and, with `debug=True`, returned a
-  stack trace. Note the wrong-algorithm case is the shape of an *alg confusion*
-  probe; the verifier already refused it correctly because it pins `algorithms`.
+  | Situation                                                  | Body                                   |
+  | ---------------------------------------------------------- | -------------------------------------- |
+  | Token expired                                              | `{"error": "Token expired"}`           |
+  | No token in the request                                    | unchanged, e.g. `{"error": "No token found in header"}` |
+  | Any other failure: issuer, audience, `typ`, signature, algorithm, malformed JWT | `{"error": "Invalid token"}` |
 
-  `jwt.InvalidKeyError` is deliberately still uncaught: a broken JWKS key is a
-  server-side fault, not a bad client token.
+  Status codes and the `{"error": ...}` shape are unchanged, and so are 403
+  (missing roles or scopes) and 502 (Keycloak unreachable) bodies.
 
-- **`MockKeycloakPlugin` no longer raises on app shutdown.** The testing helper set
-  only `_config`, `_jwks_cache`, and `_verifier`, but the inherited `_on_shutdown`
-  closes `self._http` — so exiting a `TestClient` context raised
-  `AttributeError: '_MockPlugin' object has no attribute '_http'`. It now
-  constructs a `KeycloakHttpClient`, which is never used (the JWKS cache is
-  in-memory) and whose `close()` no-ops when no session was opened. This affected
-  anyone following `docs/guides/testing.md`.
+  The detailed reason now goes to the `litestar_keycloak.exceptions` logger at
+  `INFO`, for example:
+
+  ```
+  Authentication failed: InvalidIssuerError: Expected issuer 'https://kc.example.com/realms/my-realm', got 'https://other.example.com/realms/my-realm'
+  ```
+
+  Requests without a token are not logged. The raw token is never logged.
+
+## Added
+
+- **`strict_audience` setting, default `False`.** By default the plugin accepts a
+  token whose `aud` names another service as long as `azp` is your client or one
+  of `optional_audiences`. Default Keycloak realms depend on this, because
+  Keycloak does not put the requesting client into the access token's `aud`.
+  With `strict_audience=True`, only `aud` counts: the token must list your
+  `audience` (or `client_id`) or one of `optional_audiences`, and a token without
+  `aud` is rejected with 401 `{"error": "Invalid token"}` at request time.
+
+  Before enabling it, add an Audience mapper (`oidc-audience-mapper`) to every
+  client that requests tokens for your API. The steps are in
+  [Service-to-service](docs/guides/service-to-service.md#requiring-the-audience-in-aud-strict_audience).
 
 ## Tests
 
-- Coverage raised from 98% to **99%**; `models.py`, `routes.py`, and `token.py` are
-  now at 100%. 177 unit tests and 20 integration tests.
-- New regression tests for both fixes above, each verified to fail against the
-  unfixed code.
-- New integration tests: token expiry against real Keycloak (via a short-lived
-  client), scope guards against real token scopes, and logout invalidating the
-  refresh token.
-- `TESTING.md` rewritten to describe the suite as built, including its deliberate
-  non-goals (no token revocation checking, no OIDC discovery).
+- 192 unit tests (was 177): both audience modes, the exact 401 bodies for each
+  failure type, the log line, and route-level checks that a wrong-issuer token
+  gets `{"error": "Invalid token"}` while a 403 body still names the missing role.
+- Integration tests are unchanged: the default audience behaviour is the same as
+  in 0.3.1.
 
 ## Upgrading
 
-No API or configuration changes. If you assert on status codes for malformed
-tokens, expect 401 where you previously saw 500.
+No API changes; `strict_audience` defaults to `False`, so token acceptance is the
+same as in 0.3.1.
+
+- If your clients, tests or monitoring match on 401 message text, switch them to
+  the three messages above, or to the status code. For the detailed reason, read
+  the `litestar_keycloak.exceptions` logger at `INFO`.
+- To adopt strict mode: add the Audience mapper in Keycloak, check that a fresh
+  token's `aud` contains your client ID, then set `strict_audience=True`.
