@@ -68,6 +68,7 @@ The plugin is configured with a single **KeycloakConfig** instance. Only `server
 | `exclude_patterns`   | `()`                   | Regex patterns for path prefixes/subtrees that skip auth. |
 | `audience`           | `None`                 | Expected `aud` claim; defaults to `client_id`.           |
 | `optional_audiences` | `frozenset()`          | Extra audiences (e.g. service client IDs) to accept.     |
+| `strict_audience`    | `False`                | Accept a token only if its `aud` names an accepted audience (ignore `azp`). |
 | `jwks_cache_ttl`     | `3600`                 | JWKS cache TTL in seconds.                               |
 | `algorithms`         | `("RS256",)`           | Accepted JWT algorithms.                                 |
 | `http_timeout`       | `10`                   | Timeout for HTTP calls to Keycloak.                      |

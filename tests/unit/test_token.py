@@ -234,3 +234,78 @@ async def test_verify_empty_aud_falls_back_to_azp(
     token = make_token(aud="", azp="test-app")
     payload = await verifier.verify(token)
     assert payload.azp == "test-app"
+
+
+# -- audience modes --
+
+
+async def test_verify_lenient_accepts_foreign_aud_with_our_azp(
+    token_verifier, make_token
+):
+    """Default (lenient) mode accepts aud="account" when azp is accepted."""
+    token = make_token(aud="account", azp="test-app")
+    payload = await token_verifier.verify(token)
+    assert payload.azp == "test-app"
+
+
+@pytest.fixture
+def strict_verifier(keycloak_config, mock_jwks_cache) -> TokenVerifier:
+    config = dataclasses.replace(
+        keycloak_config,
+        strict_audience=True,
+        optional_audiences=frozenset({"other-service"}),
+    )
+    return TokenVerifier(config, mock_jwks_cache)
+
+
+async def test_verify_strict_accepts_matching_aud(strict_verifier, make_token):
+    """Strict mode accepts a token whose aud is the configured audience."""
+    payload = await strict_verifier.verify(make_token(aud="test-app"))
+    assert payload.aud == "test-app"
+
+
+async def test_verify_strict_accepts_aud_list_with_optional_audience(
+    strict_verifier, make_token
+):
+    """Strict mode accepts an aud list containing an optional audience."""
+    token = make_token(aud=["account", "other-service"])
+    payload = await strict_verifier.verify(token)
+    assert payload.sub == "test-user-id"
+
+
+async def test_verify_strict_rejects_foreign_aud_with_our_azp(
+    strict_verifier, make_token
+):
+    """Strict mode ignores azp: a foreign aud is rejected."""
+    token = make_token(aud="other-api", azp="test-app")
+    with pytest.raises(InvalidAudienceError):
+        await strict_verifier.verify(token)
+
+
+@pytest.mark.parametrize("aud", ["", []])
+async def test_verify_strict_rejects_empty_aud(strict_verifier, make_token, aud):
+    """Strict mode rejects an empty aud even when azp is accepted."""
+    token = make_token(aud=aud, azp="test-app")
+    with pytest.raises(InvalidAudienceError):
+        await strict_verifier.verify(token)
+
+
+async def test_verify_strict_rejects_missing_aud(strict_verifier, rsa_keypair):
+    """Strict mode rejects a token with no aud claim even when azp is accepted."""
+    private_key, _ = rsa_keypair
+    now = int(time.time())
+    token = jwt.encode(
+        {
+            "sub": "user-1",
+            "iss": "http://localhost:8080/realms/test-realm",
+            "azp": "test-app",
+            "iat": now,
+            "exp": now + 3600,
+            "typ": "Bearer",
+        },
+        private_key,
+        algorithm="RS256",
+        headers={"kid": "test-kid"},
+    )
+    with pytest.raises(InvalidAudienceError):
+        await strict_verifier.verify(token)

@@ -224,6 +224,17 @@ class TokenVerifier:
 
         accepted = self._config.accepted_audiences
         actual_aud = claims.get("aud", "")
+        if self._config.strict_audience:
+            # Only aud counts; azp is ignored and a missing/empty aud is rejected
+            if isinstance(actual_aud, list):
+                aud_set = set(actual_aud)
+            else:
+                aud_set = {actual_aud} if actual_aud else set()
+            if not aud_set & accepted:
+                raise InvalidAudienceError(
+                    expected=", ".join(sorted(accepted)), got=actual_aud
+                )
+            return
         azp = claims.get("azp", "")
         # Keycloak: user tokens often have aud=client_id;
         # service tokens may have aud="account"

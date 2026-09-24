@@ -118,6 +118,13 @@ class KeycloakConfig:
     optional_audiences: frozenset[str] = field(default_factory=frozenset)
     """Additional audiences to accept (e.g. service client IDs)."""
 
+    strict_audience: bool = False
+    """Accept a token only if its ``aud`` contains an accepted audience.
+    ``False`` (default) also accepts a token whose ``azp`` is accepted, because
+    Keycloak access tokens often lack the client's own audience.  Before setting
+    ``True``, add a Keycloak Audience mapper (``oidc-audience-mapper``) to the
+    clients that call this API."""
+
     expected_token_type: str | None = "Bearer"
     """Required payload ``typ`` claim.  ``"Bearer"`` (default) rejects Keycloak
     ID and Refresh tokens presented as access tokens.  Set to ``None`` to disable
