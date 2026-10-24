@@ -160,6 +160,30 @@ class SessionRefreshError(KeycloakBackendError):
     """Refreshing the session's tokens failed for a reason other than rejection."""
 
 
+class ServiceTokenError(KeycloakBackendError):
+    """Keycloak did not issue a service token (client_credentials or exchange).
+
+    The message names only the grant and the OAuth ``error`` code, since a
+    502 body reaches the caller; Keycloak's ``error_description`` is kept on
+    the exception and logged.
+    """
+
+    def __init__(
+        self,
+        grant: str,
+        *,
+        status: int | None = None,
+        error: str | None = None,
+        error_description: str | None = None,
+    ) -> None:
+        self.grant = grant
+        self.status = status
+        self.error = error
+        self.error_description = error_description
+        detail = f": {error}" if error else ""
+        super().__init__(f"Keycloak did not issue a {grant} token{detail}")
+
+
 class IntrospectionError(KeycloakBackendError):
     """Keycloak's introspection endpoint could not be reached or refused us."""
 

@@ -8,6 +8,7 @@ from litestar_keycloak.dependencies import (
     OptionalCurrentUser,
     OptionalRawToken,
     OptionalTokenPayload,
+    ServiceTokens,
 )
 from litestar_keycloak.guards import (
     MatchStrategy,
@@ -21,6 +22,7 @@ from litestar_keycloak.guards import (
 )
 from litestar_keycloak.models import KeycloakUser, TokenPayload
 from litestar_keycloak.plugin import KeycloakPlugin
+from litestar_keycloak.service_tokens import ServiceTokenClient
 
 __all__ = [
     "CurrentRawToken",
@@ -33,6 +35,8 @@ __all__ = [
     "OptionalCurrentUser",
     "OptionalRawToken",
     "OptionalTokenPayload",
+    "ServiceTokenClient",
+    "ServiceTokens",
     "TokenLocation",
     "TokenPayload",
     "require_acr",

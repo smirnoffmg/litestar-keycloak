@@ -18,6 +18,7 @@ token validation, dependency injection, and guards via Litestar's native plugin 
 - JWKS caching with automatic key rotation
 - Realm/client role, group, scope and step-up (`acr`, recent login) guards
 - Optional token introspection, so a logout or a disabled user takes effect at once
+- Outbound service tokens: cached client_credentials and RFC 8693 token exchange
 - `KeycloakUser` injection via Litestar DI
 - Optional login/callback/logout/refresh routes — SPA (JSON) or server-rendered (session) flow
 

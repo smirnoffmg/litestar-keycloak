@@ -53,21 +53,47 @@ Then check a fresh token: its `aud` must contain `my-app`. In the admin console,
 
 We recommend enabling `strict_audience` once every calling client has the mapper. Keycloak describes the mapper in the Server Administration Guide, section "Hardcoded audience".
 
-## Obtaining a service token (client_credentials)
+## Calling other services: `service_tokens`
 
-Outside the plugin you request a token from Keycloak's token endpoint:
+The plugin owns a `ServiceTokenClient` that obtains outbound tokens with this app's own client credentials (`client_id` + `client_secret`, so the client must be confidential). Handlers receive it as `service_tokens`; code outside handlers uses `plugin.service_tokens` once the app is initialised.
 
-```http
-POST /realms/{realm}/protocol/openid-connect/token
-Content-Type: application/x-www-form-urlencoded
+### As this service: `client_token()`
 
-grant_type=client_credentials&client_id=my-service-client&client_secret=...
+A client_credentials grant — the app calls another service as itself (its *service account*; enable *Service accounts roles* on the client in Keycloak):
+
+```python
+from litestar import get
+from litestar_keycloak import ServiceTokens
+
+@get("/reports/nightly", exclude_from_auth=True)
+async def nightly(service_tokens: ServiceTokens) -> dict:
+    token = await service_tokens.client_token()          # or client_token(scope="reports:read")
+    ...  # Authorization: Bearer {token}
 ```
 
-Use the returned `access_token` in the `Authorization: Bearer ...` header when calling your Litestar app (or another service that validates the same realm).
+Tokens are cached per `scope` and renewed 30 seconds before they expire (at half-life for tokens shorter than a minute); concurrent callers share one grant. Tokens carrying a `client_id` claim are recognised on the receiving side as `KeycloakUser.is_service_account`.
+
+### On behalf of the user: `exchange()`
+
+Forwarding the caller's own token (below) hands the downstream service a token addressed to *you*. Token exchange (RFC 8693) instead asks Keycloak for a token for the downstream service, for the same user:
+
+```python
+from litestar_keycloak import CurrentRawToken, ServiceTokens
+
+@get("/orders/{order_id:int}/invoice")
+async def invoice(order_id: int, raw_token: CurrentRawToken, service_tokens: ServiceTokens) -> dict:
+    billing_token = await service_tokens.exchange(raw_token, audience="billing")
+    ...  # call billing with Authorization: Bearer {billing_token}
+```
+
+This uses Keycloak's **standard token exchange**, available from **Keycloak 26.2**. On this app's client enable *Standard token exchange* (attribute `standard.token.exchange.enabled`), and make sure
+
+- the incoming token's `aud` contains this client — e.g. an Audience mapper on the frontend client (and then `strict_audience=True` here costs nothing);
+- the requested `audience` is available to this client — e.g. an Audience mapper for `billing` on this client.
+
+Exchanged tokens are not cached. If Keycloak refuses (`audience` not available, exchange not enabled, invalid subject token) or cannot be reached, the call raises `ServiceTokenError` — a `502` if left unhandled. Its `error` and `error_description` attributes (also logged at `WARNING`) say why; the response body only names the error code.
 
 ## Forwarding the user token
-
 When your Litestar app calls a downstream API that also validates Keycloak tokens, you can forward the current user's token so the downstream service sees the same identity.
 
 Inject the **raw_token** dependency and pass it in the request:

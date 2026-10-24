@@ -48,6 +48,23 @@ class KeycloakHttpClient:
             resp.raise_for_status()
             return cast("dict[str, Any]", await resp.json(content_type=None))
 
+    async def post_form_status(
+        self, url: str, data: dict[str, str]
+    ) -> tuple[int, dict[str, Any]]:
+        """POST form-encoded *data*; return ``(status, JSON body)`` without raising.
+
+        For grants whose error body matters to the caller (RFC 6749 §5.2
+        ``error`` / ``error_description``).  A body that is not JSON comes back
+        as ``{}``.
+        """
+        session = await self._get_session()
+        async with session.post(url, data=data, headers=_FORM_HEADERS) as resp:
+            try:
+                body = await resp.json(content_type=None)
+            except ValueError:
+                body = {}
+            return resp.status, body if isinstance(body, dict) else {}
+
     async def post_form_discard(self, url: str, data: dict[str, str]) -> None:
         """POST *data* as form-encoded, ignoring the response.
 

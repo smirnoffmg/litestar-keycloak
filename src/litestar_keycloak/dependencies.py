@@ -20,6 +20,7 @@ from litestar.di import Provide
 
 from litestar_keycloak.auth import RAW_TOKEN_STATE_KEY, TOKEN_STATE_KEY
 from litestar_keycloak.models import KeycloakUser, TokenPayload  # noqa: TC001
+from litestar_keycloak.service_tokens import ServiceTokenClient  # noqa: TC001
 
 # Injection is name-based: these aliases only add the marker litestar 3.0 will
 # require, so the parameter name must still be exactly ``current_user``,
@@ -34,6 +35,7 @@ if TYPE_CHECKING:
     type OptionalCurrentUser = NamedDependency[KeycloakUser | None]
     type OptionalTokenPayload = NamedDependency[TokenPayload | None]
     type OptionalRawToken = NamedDependency[str | None]
+    type ServiceTokens = NamedDependency[ServiceTokenClient]
 else:
     try:
         from litestar.di import NamedDependency
@@ -44,6 +46,7 @@ else:
         OptionalCurrentUser = NamedDependency[KeycloakUser | None]
         OptionalTokenPayload = NamedDependency[TokenPayload | None]
         OptionalRawToken = NamedDependency[str | None]
+        ServiceTokens = NamedDependency[ServiceTokenClient]
     except ImportError:  # litestar < 2.23 has no NamedDependency marker
         CurrentUser = KeycloakUser
         CurrentTokenPayload = TokenPayload
@@ -51,6 +54,7 @@ else:
         OptionalCurrentUser = KeycloakUser | None
         OptionalTokenPayload = TokenPayload | None
         OptionalRawToken = str | None
+        ServiceTokens = ServiceTokenClient
 
 
 async def _provide_current_user(

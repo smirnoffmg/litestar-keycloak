@@ -15,6 +15,8 @@ from litestar_keycloak import (
     OptionalCurrentUser,
     OptionalTokenPayload,
     OptionalRawToken,
+    ServiceTokens,
+    ServiceTokenClient,
     require_roles,
     require_client_roles,
     require_groups,
@@ -73,6 +75,15 @@ Annotate handler parameters with these; the parameter names must stay
 | `OptionalCurrentUser`  | `KeycloakUser \| None` — for [optional-auth](configuration.md#optional-authentication) routes |
 | `OptionalTokenPayload` | `TokenPayload \| None` |
 | `OptionalRawToken`     | `str \| None` |
+| `ServiceTokens`        | `ServiceTokenClient` (parameter name `service_tokens`) — outbound tokens, see [Service-to-service](guides/service-to-service.md#calling-other-services-service_tokens) |
+
+## Outbound tokens
+
+::: litestar_keycloak.service_tokens.ServiceTokenClient
+    options:
+      show_source: true
+      show_root_heading: true
+      members: true
 
 ## Guards
 

@@ -49,3 +49,18 @@ def test_expired_token_from_helper_is_rejected():
     with TestClient(_app()) as client:
         resp = client.get("/me", headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 401
+
+
+def test_mock_plugin_supports_service_tokens():
+    """The test double must not break apps that inject service_tokens."""
+    from litestar_keycloak import ServiceTokens
+
+    @get("/svc", exclude_from_auth=True)
+    async def svc(service_tokens: ServiceTokens) -> dict:
+        return {"ok": service_tokens is not None}
+
+    app = Litestar(
+        route_handlers=[svc], plugins=[MockKeycloakPlugin(client_secret="s")]
+    )
+    with TestClient(app) as client:
+        assert client.get("/svc").json() == {"ok": True}

@@ -1,6 +1,6 @@
 """Tests for KeycloakPlugin registration (middleware, deps, handlers, startup)."""
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from litestar.config.app import AppConfig
@@ -181,3 +181,33 @@ def test_plugin_wires_introspection_only_when_enabled(keycloak_config):
         token_introspection=True,
     )
     assert KeycloakPlugin(enabled)._verifier._introspector is not None
+
+
+def test_service_tokens_are_injectable_and_exposed_after_init():
+    """Handlers get the plugin's ServiceTokenClient by name; so does other code."""
+    from litestar import Litestar, get
+    from litestar.testing import TestClient
+
+    from litestar_keycloak import ServiceTokenClient, ServiceTokens
+
+    @get("/client", exclude_from_auth=True)
+    async def handler(service_tokens: ServiceTokens) -> dict:
+        return {"type": type(service_tokens).__name__, "id": id(service_tokens)}
+
+    plugin = KeycloakPlugin(
+        KeycloakConfig(
+            server_url="http://localhost:8080",
+            realm="test-realm",
+            client_id="test-app",
+            client_secret="s",
+        )
+    )
+    app = Litestar(route_handlers=[handler], plugins=[plugin])
+    with (
+        patch("litestar_keycloak.plugin.JWKSCache.warm", new_callable=AsyncMock),
+        TestClient(app) as client,
+    ):
+        body = client.get("/client").json()
+    assert body["type"] == "ServiceTokenClient"
+    assert isinstance(plugin.service_tokens, ServiceTokenClient)
+    assert body["id"] == id(plugin.service_tokens)

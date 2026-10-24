@@ -2,6 +2,8 @@
 
 from unittest.mock import patch
 
+import pytest
+
 from litestar_keycloak.http_client import KeycloakHttpClient
 
 
@@ -118,3 +120,36 @@ async def test_post_form_discard_ignores_response():
         session = await client._get_session()
     assert result is None
     assert session.calls[0][0] == "POST"
+
+
+class _StatusResp(_FakeResp):
+    def __init__(self, status: int, data: object) -> None:
+        super().__init__(data)  # type: ignore[arg-type]
+        self.status = status
+
+    async def json(self, content_type: object = None) -> dict:
+        if isinstance(self._data, Exception):
+            raise self._data
+        return self._data  # type: ignore[return-value]
+
+
+@pytest.mark.parametrize(
+    ("status", "body", "expected"),
+    [
+        (200, {"access_token": "at"}, {"access_token": "at"}),
+        (400, {"error": "invalid_request"}, {"error": "invalid_request"}),
+        (502, ValueError("not json"), {}),
+    ],
+)
+async def test_post_form_status_returns_status_and_body_without_raising(
+    status, body, expected
+):
+    """Token-grant callers need Keycloak's error body, so non-2xx must not raise."""
+    client = KeycloakHttpClient(10)
+    with patch("litestar_keycloak.http_client.aiohttp.ClientSession", _FakeSession):
+        session = await client._get_session()
+        session.post = lambda url, data=None, headers=None: _StatusResp(status, body)  # type: ignore[method-assign]
+        assert await client.post_form_status("http://kc/token", {"a": "b"}) == (
+            status,
+            expected,
+        )

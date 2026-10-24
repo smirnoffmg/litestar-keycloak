@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any, cast
 
+from litestar.di import Provide
 from litestar.middleware import DefineMiddleware
 from litestar.plugins import InitPluginProtocol
 
@@ -23,6 +24,7 @@ from litestar_keycloak.exceptions import JWKSFetchError, exception_handlers
 from litestar_keycloak.http_client import KeycloakHttpClient
 from litestar_keycloak.introspection import TokenIntrospector
 from litestar_keycloak.routes import _refresh_token, build_auth_controller
+from litestar_keycloak.service_tokens import ServiceTokenClient
 from litestar_keycloak.token import JWKSCache, TokenVerifier
 
 if TYPE_CHECKING:
@@ -53,7 +55,7 @@ class KeycloakPlugin(InitPluginProtocol):
         )
     """
 
-    __slots__ = ("_config", "_http", "_jwks_cache", "_verifier")
+    __slots__ = ("_config", "_http", "_jwks_cache", "_service_tokens", "_verifier")
 
     def __init__(self, config: KeycloakConfig) -> None:
         self._config = config
@@ -110,8 +112,14 @@ class KeycloakPlugin(InitPluginProtocol):
         )
 
         # -- DI providers --------------------------------------------------
+        # Built here rather than in __init__ so plugin subclasses that replace
+        # __init__ (e.g. test doubles) still get one.
+        self._service_tokens = ServiceTokenClient(self._config, self._http)
         app_config.dependencies = {
             **build_dependencies(),
+            "service_tokens": Provide(
+                self._provide_service_tokens, sync_to_thread=False
+            ),
             **app_config.dependencies,
         }
 
@@ -125,6 +133,15 @@ class KeycloakPlugin(InitPluginProtocol):
         app_config.on_shutdown.append(self._on_shutdown)
 
         return app_config
+
+    @property
+    def service_tokens(self) -> ServiceTokenClient:
+        """Outbound token client, for code outside handlers (available once the
+        app is initialised; handlers declare ``service_tokens: ServiceTokens``)."""
+        return self._service_tokens
+
+    def _provide_service_tokens(self) -> ServiceTokenClient:
+        return self._service_tokens
 
     async def _refresh_session_tokens(self, refresh_token: str) -> dict[str, Any]:
         return await _refresh_token(self._config, refresh_token, http=self._http)
