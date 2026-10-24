@@ -34,6 +34,12 @@ def test_include_routes_without_redirect_uri_raises_value_error():
     )
 
 
+def test_negative_leeway_raises_value_error():
+    """leeway < 0 raises ValueError."""
+    with pytest.raises(ValueError, match="leeway"):
+        KeycloakConfig(server_url="https://kc", realm="r", client_id="c", leeway=-1)
+
+
 def test_negative_jwks_cache_ttl_raises_value_error():
     """Negative jwks_cache_ttl raises ValueError."""
     with pytest.raises(ValueError) as exc_info:

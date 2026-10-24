@@ -5,6 +5,9 @@ import time
 
 import jwt
 import pytest
+from cryptography.hazmat.primitives.asymmetric import ec, ed25519
+from jwt import PyJWK
+from jwt.algorithms import ECAlgorithm, OKPAlgorithm
 
 from litestar_keycloak.exceptions import (
     InvalidAudienceError,
@@ -309,3 +312,103 @@ async def test_verify_strict_rejects_missing_aud(strict_verifier, rsa_keypair):
     )
     with pytest.raises(InvalidAudienceError):
         await strict_verifier.verify(token)
+
+
+class _KeyByKid:
+    """JWKS double serving several keys by kid."""
+
+    def __init__(self, keys: dict[str, PyJWK]) -> None:
+        self._keys = keys
+
+    async def get_key(self, kid: str) -> PyJWK:
+        if kid not in self._keys:
+            raise JWKSFetchError(f"Key {kid!r} not found in JWKS after refresh")
+        return self._keys[kid]
+
+
+def _claims(**overrides) -> dict:
+    now = int(time.time())
+    return {
+        "sub": "user-1",
+        "iss": "http://localhost:8080/realms/test-realm",
+        "aud": "test-app",
+        "iat": now,
+        "exp": now + 3600,
+        "typ": "Bearer",
+        **overrides,
+    }
+
+
+@pytest.fixture(scope="module")
+def ec_keypair():
+    private = ec.generate_private_key(ec.SECP256R1())
+    jwk_dict = ECAlgorithm.to_jwk(private.public_key(), as_dict=True)
+    return private, PyJWK({**jwk_dict, "kid": "ec-kid", "alg": "ES256"})
+
+
+@pytest.fixture(scope="module")
+def ed25519_keypair():
+    private = ed25519.Ed25519PrivateKey.generate()
+    jwk_dict = OKPAlgorithm.to_jwk(private.public_key(), as_dict=True)
+    return private, PyJWK({**jwk_dict, "kid": "ed-kid", "alg": "EdDSA"})
+
+
+def _multi_alg_verifier(keycloak_config, test_jwk, ec_keypair, ed25519_keypair):
+    config = dataclasses.replace(
+        keycloak_config, algorithms=("RS256", "ES256", "EdDSA")
+    )
+    cache = _KeyByKid(
+        {"test-kid": test_jwk, "ec-kid": ec_keypair[1], "ed-kid": ed25519_keypair[1]}
+    )
+    return TokenVerifier(config, cache)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("keypair", "alg", "kid"),
+    [("ec_keypair", "ES256", "ec-kid"), ("ed25519_keypair", "EdDSA", "ed-kid")],
+)
+async def test_verify_accepts_non_rsa_signing_keys(
+    request, keycloak_config, test_jwk, ec_keypair, ed25519_keypair, keypair, alg, kid
+):
+    """Realms signing with an EC or Ed25519 key are supported."""
+    verifier = _multi_alg_verifier(
+        keycloak_config, test_jwk, ec_keypair, ed25519_keypair
+    )
+    private, _ = request.getfixturevalue(keypair)
+    token = jwt.encode(_claims(), private, algorithm=alg, headers={"kid": kid})
+    payload = await verifier.verify(token)
+    assert payload.sub == "user-1"
+
+
+async def test_verify_rejects_alg_from_another_key_family(
+    keycloak_config, test_jwk, ec_keypair, ed25519_keypair, rsa_keypair
+):
+    """An RS256 token pointing at an EC kid is a 401, not a server error."""
+    verifier = _multi_alg_verifier(
+        keycloak_config, test_jwk, ec_keypair, ed25519_keypair
+    )
+    rsa_private, _ = rsa_keypair
+    token = jwt.encode(
+        _claims(), rsa_private, algorithm="RS256", headers={"kid": "ec-kid"}
+    )
+    with pytest.raises(TokenDecodeError, match="ES256|EC"):
+        await verifier.verify(token)
+
+
+async def test_verify_rejects_recently_expired_token_without_leeway(
+    token_verifier, make_token
+):
+    """Default leeway is 0: a token expired seconds ago is rejected."""
+    token = make_token(exp_offset=-5)
+    with pytest.raises(TokenExpiredError):
+        await token_verifier.verify(token)
+
+
+async def test_verify_leeway_tolerates_clock_skew(
+    keycloak_config, mock_jwks_cache, make_token
+):
+    """With leeway, a slightly expired token and a future iat both pass."""
+    config = dataclasses.replace(keycloak_config, leeway=30)
+    verifier = TokenVerifier(config, mock_jwks_cache)
+    await verifier.verify(make_token(exp_offset=-5))
+    await verifier.verify(make_token(iat=int(time.time()) + 10))

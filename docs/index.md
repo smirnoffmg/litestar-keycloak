@@ -47,7 +47,7 @@ app = Litestar(
 )
 ```
 
-Any route that declares `current_user: CurrentUser` (or `token_payload` / `raw_token`) requires a valid Bearer token. Requests without a token or with an invalid token receive `401 Unauthorized`.
+Any route that declares `current_user: CurrentUser` (or `token_payload` / `raw_token`) requires a valid Bearer token. Requests without a token or with an invalid token receive `401 Unauthorized` with an RFC 6750 `WWW-Authenticate: Bearer` challenge (`error="invalid_token"` when a token was presented but rejected).
 
 ## Configuration
 

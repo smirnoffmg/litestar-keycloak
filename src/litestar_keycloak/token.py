@@ -40,6 +40,12 @@ logger = logging.getLogger(__name__)
 #: while still picking up a rotated key within seconds.
 MIN_FORCED_REFRESH_INTERVAL = 10
 
+_RSA_SIG_ALGS = frozenset({"RS256", "RS384", "RS512"})
+
+#: JWK ``kty`` that verifies each JWS ``alg`` family, keyed by the alg's first
+#: two letters (``RS``/``PS`` RSA, ``ES`` ECDSA, ``Ed`` EdDSA).
+_KTY_BY_ALG_FAMILY = {"RS": "RSA", "PS": "RSA", "ES": "EC", "Ed": "OKP"}
+
 
 class JWKSCache:
     """Async, TTL-based cache for Keycloak's JSON Web Key Set.
@@ -124,30 +130,17 @@ class JWKSCache:
 
             jwks_data = await self._fetch_jwks()
             keys: dict[str, PyJWK] = {}
-            _SIG_ALGS = frozenset({"RS256", "RS384", "RS512"})
             for key_data in jwks_data.get("keys", []):
                 kid = key_data.get("kid")
                 if kid is None:
                     continue
-                if key_data.get("kty") != "RSA":
-                    logger.debug(
-                        "Skipping non-RSA JWK kid=%s kty=%s", kid, key_data.get("kty")
-                    )
-                    continue
-                use = key_data.get("use")
-                alg = key_data.get("alg")
-                # Prefer explicit signing alg; RS256 for enc-only keys (same material)
-                force_alg: str | None = None
-                if use == "enc" or (alg and alg not in _SIG_ALGS):
-                    force_alg = "RS256"
                 try:
-                    keys[kid] = (
-                        PyJWK(key_data, algorithm=force_alg)
-                        if force_alg
-                        else PyJWK(key_data)
-                    )
+                    key = _parse_signing_jwk(key_data)
                 except Exception as exc:
                     logger.warning("Skipping unparseable JWK kid=%s: %s", kid, exc)
+                    continue
+                if key is not None:
+                    keys[kid] = key
 
             self._keys = keys
             self._fetched_at = time.monotonic()
@@ -162,6 +155,43 @@ class JWKSCache:
             raise JWKSFetchError(
                 f"Failed to fetch JWKS from {self._jwks_url}: {exc}"
             ) from exc
+
+
+def _parse_signing_jwk(key_data: dict[str, Any]) -> PyJWK | None:
+    """Build a verification key from a JWK, or ``None`` if it cannot sign.
+
+    RSA keys keep the historical leniency: an encryption key or one with a
+    non-signing ``alg`` is parsed as RS256, since the material is the same.
+    EC and OKP keys published for encryption (e.g. ``ECDH-ES``) are skipped.
+    """
+    kty = key_data.get("kty")
+    kid = key_data.get("kid")
+    if kty == "RSA":
+        alg = key_data.get("alg")
+        if key_data.get("use") == "enc" or (alg and alg not in _RSA_SIG_ALGS):
+            return PyJWK(key_data, algorithm="RS256")
+        return PyJWK(key_data)
+    if kty in ("EC", "OKP"):
+        if key_data.get("use") == "enc":
+            logger.debug("Skipping encryption JWK kid=%s kty=%s", kid, kty)
+            return None
+        return PyJWK(key_data)
+    logger.debug("Skipping unsupported JWK kid=%s kty=%s", kid, kty)
+    return None
+
+
+def _check_alg_matches_key(alg: str, kid: str, key: PyJWK) -> None:
+    """Reject a token whose ``alg`` belongs to a different key family.
+
+    ``jwt.decode`` gets the raw key object, so an RS256 header pointing at an
+    EC ``kid`` would otherwise reach PyJWT as ``InvalidKeyError`` — a 500 that
+    any client could trigger once a realm publishes keys of several types.
+    """
+    expected_kty = _KTY_BY_ALG_FAMILY.get(alg[:2])
+    if expected_kty != key.key_type:
+        raise TokenDecodeError(
+            f"Token alg {alg!r} cannot be verified with {key.key_type} key {kid!r}"
+        )
 
 
 class TokenVerifier:
@@ -186,8 +216,9 @@ class TokenVerifier:
             InvalidAudienceError: ``aud`` does not include the client ID.
             JWKSFetchError: Signing key could not be retrieved.
         """
-        kid = self._extract_kid(raw_token)
+        kid, alg = self._read_header(raw_token)
         signing_key = await self._jwks_cache.get_key(kid)
+        _check_alg_matches_key(alg, kid, signing_key)
 
         claims = self._decode(raw_token, signing_key)
         self._validate_claims(claims)
@@ -197,7 +228,8 @@ class TokenVerifier:
     # -- internals ---------------------------------------------------------
 
     @staticmethod
-    def _extract_kid(raw_token: str) -> str:
+    def _read_header(raw_token: str) -> tuple[str, str]:
+        """Return the unverified ``(kid, alg)`` from the JWT header."""
         try:
             headers = jwt.get_unverified_header(raw_token)
         except jwt.exceptions.DecodeError as exc:
@@ -206,7 +238,7 @@ class TokenVerifier:
         kid = headers.get("kid")
         if kid is None:
             raise TokenDecodeError("JWT header missing 'kid'")
-        return str(kid)
+        return str(kid), str(headers.get("alg", ""))
 
     def _decode(self, raw_token: str, signing_key: PyJWK) -> dict[str, Any]:
         try:
@@ -214,6 +246,7 @@ class TokenVerifier:
                 raw_token,
                 signing_key.key,
                 algorithms=list(self._config.algorithms),
+                leeway=self._config.leeway,
                 options={
                     "verify_exp": True,
                     "verify_iat": True,

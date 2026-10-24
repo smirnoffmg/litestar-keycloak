@@ -192,3 +192,73 @@ def test_authentication_error_handler_logs_detail(caplog):
     assert record.name == "litestar_keycloak.exceptions"
     assert "InvalidIssuerError" in record.getMessage()
     assert str(exc) in record.getMessage()
+
+
+# --- RFC 6750 WWW-Authenticate ---
+
+
+def test_missing_token_challenge_has_no_error_code():
+    """RFC 6750 §3: a request without credentials gets a bare Bearer challenge."""
+    response = exception_handlers[AuthenticationError](
+        _mock_request(), MissingTokenError("header")
+    )
+    assert response.headers["WWW-Authenticate"] == "Bearer"
+
+
+@pytest.mark.parametrize(
+    ("exc", "challenge"),
+    [
+        (
+            TokenExpiredError("Signature has expired"),
+            'Bearer error="invalid_token", error_description="Token expired"',
+        ),
+        (
+            InvalidIssuerError(expected="https://kc/realms/r", got="https://evil"),
+            'Bearer error="invalid_token"',
+        ),
+    ],
+)
+def test_invalid_token_challenge(exc, challenge):
+    """A rejected token gets error="invalid_token" and no validation detail."""
+    response = exception_handlers[AuthenticationError](_mock_request(), exc)
+    assert response.headers["WWW-Authenticate"] == challenge
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        InsufficientRoleError(required=frozenset({"admin"}), actual=frozenset()),
+        InsufficientScopeError(required=frozenset({"write"}), actual=frozenset()),
+    ],
+)
+def test_authorization_error_challenge_is_insufficient_scope(exc):
+    """A 403 tells the client the token lacks privileges (RFC 6750 §3.1)."""
+    response = exception_handlers[AuthorizationError](_mock_request(), exc)
+    assert response.headers["WWW-Authenticate"] == 'Bearer error="insufficient_scope"'
+
+
+def test_backend_error_has_no_challenge():
+    """A 502 is not about the client's credentials."""
+    response = exception_handlers[KeycloakBackendError](
+        _mock_request(), JWKSFetchError("down")
+    )
+    assert "WWW-Authenticate" not in response.headers
+
+
+# --- Authorization audit log ---
+
+
+def test_authorization_error_is_logged_as_warning(caplog):
+    """A denied request is logged with who, what and why."""
+    request = MagicMock()
+    request.method = "DELETE"
+    request.url.path = "/admin/users/7"
+    request.scope = {"user": MagicMock(sub="user-42")}
+    exc = InsufficientRoleError(required=frozenset({"admin"}), actual=frozenset())
+    with caplog.at_level(logging.WARNING, logger="litestar_keycloak.exceptions"):
+        exception_handlers[AuthorizationError](request, exc)
+    [record] = caplog.records
+    assert record.levelno == logging.WARNING
+    message = record.getMessage()
+    for part in ("DELETE", "/admin/users/7", "user-42", "Missing roles: admin"):
+        assert part in message

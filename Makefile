@@ -10,7 +10,7 @@ test-unit:
 	uv run pytest
 
 test-integration:
-	uv run pytest -m integration -v --timeout=120
+	uv run pytest -m integration -v --timeout=300
 
 test: test-unit test-integration
 

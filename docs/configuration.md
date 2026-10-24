@@ -47,7 +47,8 @@ For the redirect-mode flow (session middleware, endpoint behavior) see the [OIDC
 | `optional_audiences`  | `frozenset()` | Additional audiences to accept (e.g. a service client ID). Tokens with `aud` or `azp` in this set (or the primary audience) are accepted; with `strict_audience=True`, only `aud` counts. |
 | `strict_audience`     | `False`       | If `True`, accept a token only when its `aud` (string or list) contains the primary audience or one of `optional_audiences`. `azp` is ignored, and a token without `aud` gets `401`. Add a Keycloak Audience mapper before enabling it — see [Service-to-service](guides/service-to-service.md#requiring-the-audience-in-aud-strict_audience). |
 | `expected_issuer`     | `None`        | Expected `iss` claim; defaults to `{server_url}/realms/{realm}`. Set when Keycloak's frontend/hostname URL differs from `server_url` (e.g. behind a reverse proxy), so `iss` validation matches the value Keycloak signs. |
-| `algorithms`          | `("RS256",)`  | Accepted JWT signing algorithms.                                                                                                                                                  |
+| `algorithms`          | `("RS256",)`  | Accepted JWT signing algorithms. RSA (`RS*`, `PS*`), EC (`ES*`) and Ed25519 (`EdDSA`) keys are supported; add e.g. `"ES256"` when the realm signs with an `ecdsa-generated` key provider. A token whose `alg` does not match the key type of its `kid` gets `401`. |
+| `leeway`              | `0`           | Seconds of clock skew tolerated when checking `exp`, `nbf` and `iat`. Set a few seconds if the app and Keycloak clocks may drift. |
 | `expected_token_type` | `"Bearer"`    | Required payload `typ` claim. The default rejects Keycloak ID and Refresh tokens presented as access tokens. Set to `None` to disable the check (e.g. providers that omit `typ`). |
 
 ## JWKS and HTTP
@@ -101,6 +102,7 @@ Endpoint URLs are built from the template above — the plugin does not fetch th
 - `include_routes=True` and `redirect_uri=None` -> `ValueError`.
 - `jwks_cache_ttl < 0` -> `ValueError`.
 - `http_timeout <= 0` -> `ValueError`.
+- `leeway < 0` -> `ValueError`.
 
 ## Example
 

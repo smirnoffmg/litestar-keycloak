@@ -5,7 +5,8 @@ import base64
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.asymmetric import ec, ed25519, rsa
+from jwt.algorithms import ECAlgorithm, OKPAlgorithm
 
 from litestar_keycloak.exceptions import JWKSFetchError
 from litestar_keycloak.http_client import KeycloakHttpClient
@@ -310,3 +311,37 @@ async def test_ttl_expiry_refresh_does_not_throttle_rotation():
         key = await cache.get_key("kid-2")
     assert key.key_id == "kid-2"
     assert fetch_mock.call_count == 3
+
+
+async def test_ec_and_okp_signing_keys_are_cached():
+    """EC and Ed25519 signing keys load alongside RSA ones."""
+    ec_jwk = ECAlgorithm.to_jwk(
+        ec.generate_private_key(ec.SECP384R1()).public_key(), as_dict=True
+    )
+    ed_jwk = OKPAlgorithm.to_jwk(
+        ed25519.Ed25519PrivateKey.generate().public_key(), as_dict=True
+    )
+    jwks = {
+        "keys": [
+            {**ec_jwk, "kid": "ec-kid", "alg": "ES384", "use": "sig"},
+            {**ed_jwk, "kid": "ed-kid", "alg": "EdDSA", "use": "sig"},
+        ]
+    }
+    cache = JWKSCache("http://example.com/jwks", ttl=3600, http=KeycloakHttpClient(10))
+    with patch.object(cache, "_fetch_jwks", new_callable=AsyncMock, return_value=jwks):
+        assert (await cache.get_key("ec-kid")).algorithm_name == "ES384"
+        assert (await cache.get_key("ed-kid")).algorithm_name == "EdDSA"
+
+
+async def test_ec_encryption_key_is_skipped():
+    """An EC key published for encryption (ECDH-ES) is not a signing key."""
+    ec_jwk = ECAlgorithm.to_jwk(
+        ec.generate_private_key(ec.SECP256R1()).public_key(), as_dict=True
+    )
+    jwks = {"keys": [{**ec_jwk, "kid": "enc-kid", "alg": "ECDH-ES", "use": "enc"}]}
+    cache = JWKSCache("http://example.com/jwks", ttl=3600, http=KeycloakHttpClient(10))
+    with (
+        patch.object(cache, "_fetch_jwks", new_callable=AsyncMock, return_value=jwks),
+        pytest.raises(JWKSFetchError, match="enc-kid"),
+    ):
+        await cache.get_key("enc-kid")

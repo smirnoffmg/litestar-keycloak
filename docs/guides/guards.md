@@ -64,6 +64,8 @@ When a guard fails it raises:
 - **InsufficientRoleError** — For `require_roles` and `require_client_roles`; handled as `403` with a JSON body.
 - **InsufficientScopeError** — For `require_scopes`; handled as `403`.
 
+Every `403` carries `WWW-Authenticate: Bearer error="insufficient_scope"` (RFC 6750) and is logged at `WARNING` on the `litestar_keycloak.exceptions` logger with the method, path, the caller's `sub` and the missing roles or scopes — route that logger to your security event log if denied requests must be audited.
+
 If `connection.user` is not a **KeycloakUser** (e.g. excluded path returning `None`), the role guards raise **InsufficientRoleError** as well.
 
 ## Combining guards

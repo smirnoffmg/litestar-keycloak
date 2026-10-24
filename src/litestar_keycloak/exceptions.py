@@ -128,11 +128,22 @@ class JWKSFetchError(KeycloakBackendError):
 # ---------------------------------------------------------------------------
 
 
-def _error_response(status_code: int, detail: str) -> Response[dict[str, str]]:
+#: RFC 6750 §3 challenges.  A request without credentials gets no error code;
+#: the description repeats only what the generic response body already says.
+_CHALLENGE_NO_TOKEN = "Bearer"
+_CHALLENGE_INVALID = 'Bearer error="invalid_token"'
+_CHALLENGE_EXPIRED = 'Bearer error="invalid_token", error_description="Token expired"'
+_CHALLENGE_FORBIDDEN = 'Bearer error="insufficient_scope"'
+
+
+def _error_response(
+    status_code: int, detail: str, challenge: str | None = None
+) -> Response[dict[str, str]]:
     return Response(
         content={"error": detail},
         status_code=status_code,
         media_type=MediaType.JSON,
+        headers={"WWW-Authenticate": challenge} if challenge else None,
     )
 
 
@@ -143,17 +154,27 @@ def _handle_authentication_error(
     # expected issuer, accepted audiences or library error text; the detail
     # goes to the log instead.
     if isinstance(exc, MissingTokenError):
-        return _error_response(401, str(exc))
+        return _error_response(401, str(exc), _CHALLENGE_NO_TOKEN)
     logger.info("Authentication failed: %s: %s", type(exc).__name__, exc)
     if isinstance(exc, TokenExpiredError):
-        return _error_response(401, "Token expired")
-    return _error_response(401, "Invalid token")
+        return _error_response(401, "Token expired", _CHALLENGE_EXPIRED)
+    return _error_response(401, "Invalid token", _CHALLENGE_INVALID)
 
 
 def _handle_authorization_error(
-    _: Request[Any, Any, Any], exc: AuthorizationError
+    request: Request[Any, Any, Any], exc: AuthorizationError
 ) -> Response[dict[str, str]]:
-    return _error_response(403, str(exc))
+    # A denial of an authenticated caller is a security event worth auditing.
+    # Read the scope, not ``request.user``, which raises when no auth ran.
+    user = request.scope.get("user")
+    logger.warning(
+        "Authorization denied: %s %s sub=%s: %s",
+        request.method,
+        request.url.path,
+        getattr(user, "sub", None),
+        exc,
+    )
+    return _error_response(403, str(exc), _CHALLENGE_FORBIDDEN)
 
 
 def _handle_backend_error(

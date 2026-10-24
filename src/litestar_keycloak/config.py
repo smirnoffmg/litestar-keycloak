@@ -70,7 +70,12 @@ class KeycloakConfig:
     """``SameSite`` attribute on the OAuth ``state`` cookie the routes set."""
 
     algorithms: tuple[str, ...] = ("RS256",)
-    """Accepted JWT signing algorithms."""
+    """Accepted JWT signing algorithms.  Add e.g. ``"ES256"`` or ``"EdDSA"`` when
+    the realm signs with an EC or Ed25519 key provider."""
+
+    leeway: int = 0
+    """Seconds of clock skew tolerated when checking ``exp``, ``nbf`` and
+    ``iat``.  Set a few seconds if the app and Keycloak clocks may drift."""
 
     scopes: tuple[str, ...] = ("openid",)
     """Scopes requested during the authorization code flow."""
@@ -233,3 +238,5 @@ class KeycloakConfig:
             raise ValueError("jwks_cache_ttl must be non-negative")
         if self.http_timeout <= 0:
             raise ValueError("http_timeout must be positive")
+        if self.leeway < 0:
+            raise ValueError("leeway must be non-negative")

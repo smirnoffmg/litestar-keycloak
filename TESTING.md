@@ -11,7 +11,7 @@ Two layers, one principle: **unit tests prove the logic, integration tests prove
 | Unit        | `pytest` (default)      | unmarked                   | None — fake JWTs, in-memory JWKS    | ~2s     |
 | Integration | `pytest -m integration` | `@pytest.mark.integration` | Keycloak container (testcontainers) | ~60s+   |
 
-Current state: **217 tests across 18 files** — 197 unit, 20 integration — at **99% coverage**.
+Current state: **234 tests across 19 files** — 212 unit, 22 integration — at **99% coverage**.
 
 Integration tests are **excluded by default** (`addopts = "-m 'not integration'"`), so a bare
 `pytest` is always the fast path. `asyncio_mode = "auto"` means `async def test_*` needs no
@@ -31,7 +31,7 @@ tests/
 │   └── test_{auth,config,dependencies,exceptions,guards,http_client,jwks_cache,models,token}.py
 └── integration/
     ├── conftest.py             # Keycloak container, config, token fixtures
-    └── test_{guards_integration,jwks_refresh,oidc_flow,routes_integration,scenarios,token_validation}.py
+    └── test_{guards_integration,jwks_refresh,key_types,oidc_flow,routes_integration,scenarios,token_validation}.py
 ```
 
 `tests/unit/` and `tests/integration/` have no `__init__.py`, so **cross-file imports between
@@ -47,16 +47,16 @@ Measured with `uv run pytest --cov=litestar_keycloak --cov-report=term-missing` 
 | ----------------- | ----- | -------- | --------- |
 | `__init__.py`     | —     | 100%     | |
 | `auth.py`         | 15    | 100%     | |
-| `config.py`       | 24    | 100%     | |
+| `config.py`       | 25    | 100%     | |
 | `dependencies.py` | 4     | 82%      | `39-42` — litestar < 2.23 import shim |
-| `exceptions.py`   | 14    | 100%     | |
+| `exceptions.py`   | 21    | 100%     | |
 | `guards.py`       | 17    | 100%     | |
 | `http_client.py`  | 7     | 97%      | `31->33` — lock double-check branch |
 | `models.py`       | 25    | 100%     | |
 | `plugin.py`       | 13    | 100%     | |
 | `routes.py`       | 28    | 100%     | |
-| `token.py`        | 34    | 100%     | |
-| **Total**         | 197   | **99%**  | |
+| `token.py`        | 41    | 100%     | |
+| **Total**         | 212   | **99%**  | |
 
 There is no `fail_under` threshold; `--cov` is not in `addopts`, so coverage runs only when
 asked for.
