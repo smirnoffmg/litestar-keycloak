@@ -5,6 +5,7 @@ the app loses Keycloak while the suite's shared container keeps running.
 """
 
 import base64
+import contextlib
 import dataclasses
 import json
 import socket
@@ -95,6 +96,7 @@ class _Proxy:
         self._target = (target_host, target_port)
         self._listener = socket.create_server(("127.0.0.1", 0))
         self._sockets: list[socket.socket] = []
+        self._cut = False
         self.port = self._listener.getsockname()[1]
         threading.Thread(target=self._accept, daemon=True).start()
 
@@ -103,6 +105,9 @@ class _Proxy:
             try:
                 downstream, _ = self._listener.accept()
             except OSError:
+                return
+            if self._cut:
+                downstream.close()
                 return
             upstream = socket.create_connection(self._target)
             self._sockets += [downstream, upstream]
@@ -122,8 +127,12 @@ class _Proxy:
             dst.close()
 
     def cut(self) -> None:
-        self._listener.close()
-        for sock in self._sockets:
+        # shutdown() first: on Linux, close() alone neither wakes the thread
+        # blocked in accept() nor ends a recv(), so Keycloak stayed reachable.
+        self._cut = True
+        for sock in (self._listener, *self._sockets):
+            with contextlib.suppress(OSError):
+                sock.shutdown(socket.SHUT_RDWR)
             sock.close()
 
 
@@ -159,6 +168,8 @@ def test_keycloak_outage_keeps_valid_tokens_working(
         # B8.1. Keys warmed through the proxy; then Keycloak goes and the TTL passes.
         assert client.get("/me", headers=_bearer(token)).status_code == 200
         keycloak_proxy.cut()
+        with pytest.raises(OSError):
+            socket.create_connection(("127.0.0.1", keycloak_proxy.port), timeout=1)
         time.sleep(1.5)
         assert client.get("/me", headers=_bearer(token)).json() == {
             "username": "testuser"
