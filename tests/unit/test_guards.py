@@ -11,6 +11,7 @@ from litestar_keycloak.exceptions import (
     InsufficientGroupError,
     InsufficientRoleError,
     InsufficientScopeError,
+    MissingTokenError,
 )
 from litestar_keycloak.guards import (
     MatchStrategy,
@@ -86,12 +87,29 @@ def test_require_roles_any_strategy_none_raises():
 
 
 def test_require_roles_user_not_keycloak_user_raises():
-    """connection.user not KeycloakUser raises InsufficientRoleError."""
+    """A user from some other auth backend is refused with 403."""
     guard = require_roles("admin")
     with pytest.raises(InsufficientRoleError):
-        guard(_connection(None), _handler())
-    with pytest.raises(InsufficientRoleError):
         guard(_connection("not-a-user"), _handler())
+
+
+@pytest.mark.parametrize(
+    "guard",
+    [
+        require_roles("admin"),
+        require_client_roles("app", "admin"),
+        require_groups("/staff"),
+        require_scopes("read"),
+        require_acr("2"),
+        require_recent_auth(300),
+        require_user(lambda user: True),
+    ],
+    ids=["roles", "client-roles", "groups", "scopes", "acr", "recent", "user"],
+)
+def test_guard_on_anonymous_request_asks_for_a_token(guard):
+    """optional_auth lets anonymous requests reach guards; they need a 401 + Bearer."""
+    with pytest.raises(MissingTokenError):
+        guard(_connection(None), _handler())
 
 
 def test_require_roles_with_superset_of_roles_passes():

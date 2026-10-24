@@ -20,6 +20,7 @@ from litestar_keycloak.exceptions import (
     InsufficientGroupError,
     InsufficientRoleError,
     InsufficientScopeError,
+    MissingTokenError,
 )
 from litestar_keycloak.models import KeycloakUser
 
@@ -42,6 +43,10 @@ class MatchStrategy(enum.Enum):
 
 def _resolve_user(connection: ASGIConnection[Any, Any, Any, Any]) -> KeycloakUser:
     user = connection.user
+    if user is None:
+        # An optional_auth route let an anonymous request through; signing in
+        # can satisfy the guard, so this is a 401 with a Bearer challenge.
+        raise MissingTokenError("header")
     if not isinstance(user, KeycloakUser):
         raise InsufficientRoleError(
             required=frozenset(),

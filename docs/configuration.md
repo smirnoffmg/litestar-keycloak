@@ -114,6 +114,8 @@ async def feed(current_user: OptionalCurrentUser) -> dict:
 
 Without a token the request proceeds with `current_user`, `token_payload` and `raw_token` set to `None` (use `OptionalTokenPayload` / `OptionalRawToken`). A token that *is* sent must still be valid — a bad one gets `401`, not a silent downgrade to anonymous. Keep the `Optional…` annotations on such routes: a plain `CurrentUser` there makes an anonymous request fail with `500` (`msgspec.ValidationError … at $.current_user`).
 
+Guards still apply: an anonymous request to an `optional_auth` route with a guard gets `401` with a `Bearer` challenge, since signing in may satisfy it.
+
 `OPTIONS` requests bypass authentication by default (CORS preflight). When `include_routes=True`, the auth routes under `auth_prefix` are automatically excluded so unauthenticated users can reach login and callback.
 
 ## Derived URLs
