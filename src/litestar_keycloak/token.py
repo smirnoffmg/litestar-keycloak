@@ -35,6 +35,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+#: Minimum seconds between refreshes forced by an unknown ``kid``.  Bounds the
+#: JWKS fetches an attacker can trigger with tokens carrying made-up ``kid``s,
+#: while still picking up a rotated key within seconds.
+MIN_FORCED_REFRESH_INTERVAL = 10
+
 
 class JWKSCache:
     """Async, TTL-based cache for Keycloak's JSON Web Key Set.
@@ -43,8 +48,9 @@ class JWKSCache:
     concurrent refresh attempts so only one network call is made when
     multiple requests hit an expired cache simultaneously.
 
-    On a cache miss for an unknown ``kid``, a single forced refresh is
-    attempted before raising ``JWKSFetchError``.
+    On a cache miss for an unknown ``kid`` (e.g. after key rotation), a single
+    forced refresh is attempted before raising ``JWKSFetchError``; forced
+    refreshes are throttled to one per ``MIN_FORCED_REFRESH_INTERVAL``.
     """
 
     def __init__(self, jwks_url: str, ttl: int, http: KeycloakHttpClient) -> None:
@@ -54,6 +60,7 @@ class JWKSCache:
 
         self._keys: dict[str, PyJWK] = {}
         self._fetched_at: float = 0.0
+        self._forced_at: float = float("-inf")
         self._lock = asyncio.Lock()
 
     # -- public API --------------------------------------------------------
@@ -63,16 +70,20 @@ class JWKSCache:
 
         Lookup strategy:
         1. Return from cache if present and TTL not expired.
-        2. Refresh cache (TTL expired or unknown ``kid``).
+        2. Refresh cache (TTL expired or unknown ``kid``).  A refresh forced by
+           an unknown ``kid`` is skipped if another forced refresh ran less
+           than ``MIN_FORCED_REFRESH_INTERVAL`` seconds ago.
         3. If ``kid`` still missing after refresh, raise ``JWKSFetchError``.
         """
         key = self._lookup(kid)
         if key is not None:
             return key
 
-        await self._refresh()
+        await self._refresh(force=True)
 
-        key = self._lookup(kid)
+        # Not ``_lookup``: with ``ttl == 0`` the keys just fetched already count
+        # as expired, and the miss would turn every request into an error.
+        key = self._keys.get(kid)
         if key is not None:
             return key
 
@@ -95,12 +106,21 @@ class JWKSCache:
             return True
         return (time.monotonic() - self._fetched_at) > self._ttl
 
-    async def _refresh(self) -> None:
+    @property
+    def _forced_recently(self) -> bool:
+        return (time.monotonic() - self._forced_at) < MIN_FORCED_REFRESH_INTERVAL
+
+    async def _refresh(self, *, force: bool = False) -> None:
         async with self._lock:
-            # Double-check after acquiring: another coroutine may have
-            # already refreshed while we waited on the lock.
-            if not self._is_expired and self._keys:
+            # Double-check after acquiring: another coroutine may have already
+            # refreshed while we waited on the lock.  For a forced refresh the
+            # throttle doubles as that check — coroutines racing on one rotated
+            # kid all see the forced fetch the first of them just made.
+            fresh = self._keys and not self._is_expired
+            if fresh and (not force or self._forced_recently):
                 return
+            if fresh:
+                self._forced_at = time.monotonic()
 
             jwks_data = await self._fetch_jwks()
             keys: dict[str, PyJWK] = {}

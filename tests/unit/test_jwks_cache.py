@@ -9,7 +9,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 
 from litestar_keycloak.exceptions import JWKSFetchError
 from litestar_keycloak.http_client import KeycloakHttpClient
-from litestar_keycloak.token import JWKSCache
+from litestar_keycloak.token import MIN_FORCED_REFRESH_INTERVAL, JWKSCache
 
 
 def _int_to_base64url(i: int) -> str:
@@ -64,17 +64,17 @@ async def test_get_key_refreshes_on_ttl_expiry():
     """When TTL has expired, get_key triggers a refresh."""
     cache = JWKSCache("http://example.com/jwks", ttl=1, http=KeycloakHttpClient(10))
     jwks_data = _jwks_response("kid-1")
-    # Patch time.monotonic so _is_expired is controlled.
+    now = 100.0
     with (
         patch.object(
             cache, "_fetch_jwks", new_callable=AsyncMock, return_value=jwks_data
         ) as fetch_mock,
-        patch(
-            "litestar_keycloak.token.time.monotonic",
-            side_effect=[100, 101, 102, 103, 104, 105, 106, 107],
-        ),
+        patch("litestar_keycloak.token.time.monotonic", side_effect=lambda: now),
     ):
         await cache.get_key("kid-1")
+        await cache.get_key("kid-1")
+        assert fetch_mock.call_count == 1
+        now += 2
         await cache.get_key("kid-1")
     assert fetch_mock.call_count == 2
 
@@ -130,8 +130,8 @@ async def test_ttl_zero_always_refetches():
         cache, "_fetch_jwks", new_callable=AsyncMock, return_value=jwks_data
     ) as mock_fetch:
         await cache.warm()
-        with pytest.raises(JWKSFetchError, match="kid-1"):
-            await cache.get_key("kid-1")
+        key = await cache.get_key("kid-1")
+    assert key.key_id == "kid-1"
     assert mock_fetch.call_count == 2
 
 
@@ -165,10 +165,10 @@ async def test_malformed_jwks_response_skips_bad_keys():
         cache, "_fetch_jwks", new_callable=AsyncMock, return_value=jwks_data
     ):
         await cache.warm()
-    key = await cache.get_key("valid-kid")
-    assert key.key_id == "valid-kid"
-    with pytest.raises(JWKSFetchError, match="ec-kid"):
-        await cache.get_key("ec-kid")
+        key = await cache.get_key("valid-kid")
+        assert key.key_id == "valid-kid"
+        with pytest.raises(JWKSFetchError, match="ec-kid"):
+            await cache.get_key("ec-kid")
 
 
 async def test_jwks_key_without_kid_is_skipped():
@@ -194,9 +194,9 @@ async def test_unparseable_rsa_jwk_is_skipped():
         cache, "_fetch_jwks", new_callable=AsyncMock, return_value=jwks_data
     ):
         await cache.warm()
-    assert (await cache.get_key("valid-kid")).key_id == "valid-kid"
-    with pytest.raises(JWKSFetchError, match="bad-kid"):
-        await cache.get_key("bad-kid")
+        assert (await cache.get_key("valid-kid")).key_id == "valid-kid"
+        with pytest.raises(JWKSFetchError, match="bad-kid"):
+            await cache.get_key("bad-kid")
 
 
 async def test_fetch_jwks_network_error_wrapped_as_jwks_fetch_error():
@@ -231,3 +231,82 @@ async def test_non_signing_alg_key_is_parsed_with_rs256():
         cache, "_fetch_jwks", new_callable=AsyncMock, return_value={"keys": [key]}
     ):
         assert await cache.get_key("wrap-kid") is not None
+
+
+async def test_unknown_kid_refetches_even_when_cache_is_fresh():
+    """Key rotation: a kid issued after warm-up is fetched before the TTL expires."""
+    cache = JWKSCache("http://example.com/jwks", ttl=3600, http=KeycloakHttpClient(10))
+    fetch_mock = AsyncMock(
+        side_effect=[_jwks_response("old-kid"), _jwks_response("old-kid", "new-kid")]
+    )
+    with patch.object(cache, "_fetch_jwks", fetch_mock):
+        await cache.warm()
+        key = await cache.get_key("new-kid")
+    assert key.key_id == "new-kid"
+    assert fetch_mock.call_count == 2
+
+
+async def test_concurrent_requests_for_rotated_kid_fetch_once():
+    """Requests racing on a newly rotated kid share a single forced refresh."""
+    cache = JWKSCache("http://example.com/jwks", ttl=3600, http=KeycloakHttpClient(10))
+    fetch_mock = AsyncMock(
+        side_effect=[_jwks_response("old-kid"), _jwks_response("old-kid", "new-kid")]
+    )
+    with patch.object(cache, "_fetch_jwks", fetch_mock):
+        await cache.warm()
+        results = await asyncio.gather(*(cache.get_key("new-kid") for _ in range(3)))
+    assert all(r.key_id == "new-kid" for r in results)
+    assert fetch_mock.call_count == 2
+
+
+async def test_forced_refresh_is_throttled():
+    """Made-up kids cannot turn every request into a JWKS fetch."""
+    cache = JWKSCache("http://example.com/jwks", ttl=3600, http=KeycloakHttpClient(10))
+    fetch_mock = AsyncMock(return_value=_jwks_response("kid-1"))
+    with patch.object(cache, "_fetch_jwks", fetch_mock):
+        await cache.warm()
+        for kid in ("bogus-1", "bogus-2", "bogus-3"):
+            with pytest.raises(JWKSFetchError, match=kid):
+                await cache.get_key(kid)
+    assert fetch_mock.call_count == 2
+
+
+async def test_forced_refresh_allowed_again_after_throttle_interval():
+    """Once the throttle interval passes, an unknown kid triggers a fetch again."""
+    cache = JWKSCache("http://example.com/jwks", ttl=3600, http=KeycloakHttpClient(10))
+    fetch_mock = AsyncMock(return_value=_jwks_response("kid-1"))
+    now = 1000.0
+    with (
+        patch.object(cache, "_fetch_jwks", fetch_mock),
+        patch("litestar_keycloak.token.time.monotonic", side_effect=lambda: now),
+    ):
+        await cache.warm()
+        with pytest.raises(JWKSFetchError):
+            await cache.get_key("bogus-1")
+        now += MIN_FORCED_REFRESH_INTERVAL + 1
+        with pytest.raises(JWKSFetchError):
+            await cache.get_key("bogus-2")
+    assert fetch_mock.call_count == 3
+
+
+async def test_ttl_expiry_refresh_does_not_throttle_rotation():
+    """Only fetches forced on a fresh cache count toward the throttle."""
+    cache = JWKSCache("http://example.com/jwks", ttl=60, http=KeycloakHttpClient(10))
+    fetch_mock = AsyncMock(
+        side_effect=[
+            _jwks_response("kid-1"),
+            _jwks_response("kid-1"),
+            _jwks_response("kid-1", "kid-2"),
+        ]
+    )
+    now = 1000.0
+    with (
+        patch.object(cache, "_fetch_jwks", fetch_mock),
+        patch("litestar_keycloak.token.time.monotonic", side_effect=lambda: now),
+    ):
+        await cache.warm()
+        now += 61
+        await cache.get_key("kid-1")
+        key = await cache.get_key("kid-2")
+    assert key.key_id == "kid-2"
+    assert fetch_mock.call_count == 3
