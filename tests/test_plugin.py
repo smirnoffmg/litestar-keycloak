@@ -1,10 +1,13 @@
 """Tests for KeycloakPlugin registration (middleware, deps, handlers, startup)."""
 
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from litestar.config.app import AppConfig
 from litestar.di import Provide
+from litestar.stores.memory import MemoryStore
+from litestar.stores.registry import StoreRegistry
 
 from litestar_keycloak import KeycloakConfig, KeycloakPlugin
 from litestar_keycloak.exceptions import (
@@ -211,3 +214,28 @@ def test_service_tokens_are_injectable_and_exposed_after_init():
     assert body["type"] == "ServiceTokenClient"
     assert isinstance(plugin.service_tokens, ServiceTokenClient)
     assert body["id"] == id(plugin.service_tokens)
+
+
+@pytest.mark.parametrize(
+    ("stores", "warns"),
+    [
+        (None, True),
+        ({"sessions": MemoryStore()}, True),
+        ({"keycloak_logout": MemoryStore()}, False),
+        (StoreRegistry(), False),  # its default_factory may well be shared
+    ],
+    ids=["no-stores", "other-stores", "registered", "registry"],
+)
+def test_backchannel_logout_warns_about_a_per_process_store(caplog, stores, warns):
+    """With several instances, a logout reaching one would not reach the others."""
+    config = KeycloakConfig(
+        server_url="http://localhost:8080",
+        realm="test-realm",
+        client_id="test-app",
+        include_routes=True,
+        redirect_uri="http://localhost:8000/auth/callback",
+        backchannel_logout=True,
+    )
+    with caplog.at_level(logging.WARNING, logger="litestar_keycloak.plugin"):
+        KeycloakPlugin(config).on_app_init(AppConfig(stores=stores))
+    assert ("logout_store" in caplog.text) is warns

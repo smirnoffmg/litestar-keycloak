@@ -39,7 +39,7 @@ All plugin behavior is controlled by **KeycloakConfig**, a frozen dataclass. Onl
 | `session_auto_refresh`   | `False`       | `"redirect"` mode only: renew an expired session access token with the session's refresh token instead of answering `401`. See [OIDC routes](guides/oidc-routes.md#session-lifecycle). |
 | `session_binding`        | `False`       | `"redirect"` mode only: bind the session's tokens to an HttpOnly cookie set at login, so a session id planted by an attacker does not share the victim's login. **Recommended for redirect mode.** See [OIDC routes](guides/oidc-routes.md#session-fixation). |
 | `backchannel_logout`     | `False`       | Mount `POST {auth_prefix}/backchannel-logout` for Keycloak's back-channel logout and refuse tokens from sessions it ends. Requires `include_routes=True`. |
-| `logout_store`           | `"keycloak_logout"` | Litestar store that records back-channel logouts. In-memory per process by default — register a shared store under this name for several instances. |
+| `logout_store`           | `"keycloak_logout"` | Litestar store that records back-channel logouts. In-memory per process by default — register a shared store under this name for several instances; until you do, start-up logs a `WARNING`. |
 | `use_pkce`               | `False`       | Send a PKCE `S256` challenge on login and its verifier on the code exchange (RFC 7636). **Enable it for public clients**; recommended for confidential ones. |
 | `validate_id_token`      | `False`       | Send an OIDC `nonce` on login and require the callback's ID token to be valid for this client and carry that nonce. Requires `"openid"` in `scopes`. |
 

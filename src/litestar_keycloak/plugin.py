@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, cast
 from litestar.di import Provide
 from litestar.middleware import DefineMiddleware
 from litestar.plugins import InitPluginProtocol
+from litestar.stores.registry import StoreRegistry
 
 from litestar_keycloak.auth import create_auth_middleware
 from litestar_keycloak.dependencies import build_dependencies
@@ -29,6 +30,7 @@ from litestar_keycloak.token import JWKSCache, TokenVerifier
 
 if TYPE_CHECKING:
     from litestar.config.app import AppConfig
+    from litestar.stores.base import Store
 
     from litestar_keycloak.config import KeycloakConfig
 
@@ -123,6 +125,16 @@ class KeycloakPlugin(InitPluginProtocol):
             **app_config.dependencies,
         }
 
+        if self._config.backchannel_logout and _per_process_store(
+            app_config.stores, self._config.logout_store
+        ):
+            logger.warning(
+                "backchannel_logout records logouts in a per-process memory store; "
+                "register a shared store (e.g. Redis) under logout_store=%r when the "
+                "app runs as several instances, or a logout reaches only one of them",
+                self._config.logout_store,
+            )
+
         # -- OIDC routes ---------------------------------------------------
         if self._config.include_routes:
             controller = build_auth_controller(self._config, self._http, self._verifier)
@@ -165,3 +177,17 @@ class KeycloakPlugin(InitPluginProtocol):
     async def _on_shutdown(self) -> None:
         """Close the shared HTTP client so its connections are released."""
         await self._http.close()
+
+
+def _per_process_store(
+    stores: StoreRegistry | dict[str, Store] | None, name: str
+) -> bool:
+    """Whether Litestar will hand out its default in-memory store for *name*.
+
+    A ``StoreRegistry`` passed in may have a shared ``default_factory``, and it
+    has no public way to ask what is registered, so it gets the benefit of the
+    doubt.
+    """
+    if isinstance(stores, StoreRegistry):
+        return False
+    return name not in (stores or {})
