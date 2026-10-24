@@ -39,7 +39,11 @@ from litestar_keycloak.auth import (
     binding_digest,
     session_is_bound,
 )
-from litestar_keycloak.exceptions import AuthenticationError, TokenEndpointError
+from litestar_keycloak.exceptions import (
+    AuthenticationError,
+    TokenEndpointError,
+    TokenGrantRejectedError,
+)
 from litestar_keycloak.logout import record_logout
 
 if TYPE_CHECKING:
@@ -396,7 +400,9 @@ async def _token_request(
     except aiohttp.ClientResponseError as exc:
         if exc.status in (400, 401):
             logger.info("Keycloak rejected the %s grant: %s", grant, exc.status)
-            raise NotAuthorizedException(detail="Token request rejected") from exc
+            raise TokenGrantRejectedError(
+                f"Keycloak rejected the {grant} grant ({exc.status})"
+            ) from exc
         raise TokenEndpointError(f"Token endpoint failed: {exc}") from exc
     except (aiohttp.ClientError, OSError, ValueError) as exc:
         raise TokenEndpointError(f"Token endpoint failed: {exc}") from exc

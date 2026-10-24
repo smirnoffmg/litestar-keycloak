@@ -85,6 +85,11 @@ class TokenInactiveError(AuthenticationError):
     """Keycloak reports the token inactive (session ended, user disabled, ...)."""
 
 
+class TokenGrantRejectedError(AuthenticationError):
+    """Keycloak refused a code exchange or refresh (400/401): the code was reused
+    or expired, or the refresh token expired or was revoked."""
+
+
 class InsufficientAuthenticationError(AuthenticationError):
     """The login is too weak or too old for this route (RFC 9470 step-up).
 

@@ -103,23 +103,41 @@ def test_expired_bearer_header_is_not_refreshed():
     refresh.assert_not_awaited()
 
 
+def _token_endpoint(**kwargs):
+    """Mock at the HTTP boundary, so the refresh path's own error mapping runs."""
+    return patch(
+        "litestar_keycloak.http_client.KeycloakHttpClient.post_form",
+        new_callable=AsyncMock,
+        **kwargs,
+    )
+
+
 def test_rejected_refresh_is_401_until_the_next_login():
     """An expired or revoked refresh token keeps the session signed out."""
     rejected = aiohttp.ClientResponseError(MagicMock(), (), status=400)
     with TestClient(_app(session_auto_refresh=True)) as client:
         _sign_in(client, create_test_token(exp_offset=-60))
-        with _refresh_mock(side_effect=rejected):
-            assert client.get("/me").status_code == 401
+        with _token_endpoint(side_effect=rejected):
+            first = client.get("/me")
             assert client.get("/me").status_code == 401
         _sign_in(client, create_test_token(sub="user-1"))
         assert client.get("/me").status_code == 200
+    assert first.status_code == 401
+    assert first.headers["www-authenticate"] == (
+        'Bearer error="invalid_token", error_description="Token expired"'
+    )
+    assert first.json() == {"error": "Token expired"}
 
 
 def test_keycloak_unreachable_during_refresh_is_502():
     with TestClient(_app(session_auto_refresh=True)) as client:
         _sign_in(client, create_test_token(exp_offset=-60))
-        with _refresh_mock(side_effect=aiohttp.ClientConnectionError("refused")):
+        with (
+            _token_endpoint(side_effect=aiohttp.ClientConnectionError("refused")),
+            patch("litestar_keycloak.exceptions.logger") as log,
+        ):
             assert client.get("/me").status_code == 502
+    assert "SessionRefreshError" in log.warning.call_args.args
 
 
 # -- back-channel logout ----------------------------------------------------------
@@ -204,5 +222,5 @@ def test_keycloak_server_error_during_refresh_is_502():
     broken = aiohttp.ClientResponseError(MagicMock(), (), status=503)
     with TestClient(_app(session_auto_refresh=True)) as client:
         _sign_in(client, create_test_token(exp_offset=-60))
-        with _refresh_mock(side_effect=broken):
+        with _token_endpoint(side_effect=broken):
             assert client.get("/me").status_code == 502

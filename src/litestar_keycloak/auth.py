@@ -14,14 +14,15 @@ import hmac
 import logging
 from typing import TYPE_CHECKING, Any
 
-import aiohttp
 from litestar.middleware import AbstractAuthenticationMiddleware, AuthenticationResult
 
 from litestar_keycloak.config import TokenLocation
 from litestar_keycloak.exceptions import (
     MissingTokenError,
     SessionRefreshError,
+    TokenEndpointError,
     TokenExpiredError,
+    TokenGrantRejectedError,
     TokenInactiveError,
 )
 from litestar_keycloak.logout import is_logged_out
@@ -157,11 +158,9 @@ async def _refresh_session(
         raise TokenExpiredError("Session token expired and cannot be refreshed")
     try:
         token_data = await refresh(str(refresh_token))
-    except aiohttp.ClientResponseError as exc:
-        if exc.status in (400, 401):
-            raise TokenExpiredError("Keycloak rejected the session refresh") from exc
-        raise SessionRefreshError(f"Session refresh failed: {exc}") from exc
-    except (aiohttp.ClientError, OSError) as exc:
+    except TokenGrantRejectedError as exc:
+        raise TokenExpiredError("Keycloak rejected the session refresh") from exc
+    except TokenEndpointError as exc:
         raise SessionRefreshError(f"Session refresh failed: {exc}") from exc
 
     access_token = str(token_data["access_token"])
