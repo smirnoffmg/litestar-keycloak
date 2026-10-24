@@ -1,45 +1,35 @@
-# v0.3.4
+# v0.3.3
 
-Token verification release. Realms that sign with EC or Ed25519 keys now work,
-clock skew can be tolerated, and 401/403 responses follow RFC 6750. No breaking
-changes: every new behaviour is either additive or off by default.
-
-## New
-
-- **EC and Ed25519 signing keys.** The JWKS cache used to skip every non-RSA key, so
-  a realm with an `ecdsa-generated` or `eddsa-generated` key provider had all its
-  tokens rejected. Such keys now load; add the algorithm to `algorithms`, e.g.
-  `algorithms=("RS256", "ES256")`. EC keys published for encryption (`ECDH-ES`) are
-  skipped. Verified against real Keycloak 26 tokens signed with ES256 and EdDSA.
-
-- **`leeway`** (default `0`). Seconds of clock skew tolerated when checking `exp`,
-  `nbf` and `iat`. Set a few seconds if the app and Keycloak clocks may drift.
-
-- **`WWW-Authenticate` challenges (RFC 6750).** `401` without a token carries a bare
-  `Bearer`; a rejected token carries `error="invalid_token"` (plus
-  `error_description="Token expired"` when expired); `403` carries
-  `error="insufficient_scope"`. The response bodies are unchanged.
-
-- **Denied requests are logged.** A `403` is logged at `WARNING` on the
-  `litestar_keycloak.exceptions` logger with the method, path, the caller's `sub` and
-  the missing roles or scopes — route that logger to your security event log if
-  denials must be audited.
+Patch release. Fixes JWKS key rotation, which did not work in 0.3.2 and earlier.
 
 ## Bug fixes
 
-- **A token whose `alg` does not match its key type is a 401, not a 500.** Once a
-  JWKS holds keys of several types, a token with `alg: RS256` pointing at an EC `kid`
-  reached PyJWT as `InvalidKeyError` — an unhandled 500 any client could trigger. The
-  verifier now checks the `alg` family against the key's `kty` first.
+- **Rotated signing keys are now picked up immediately.** `JWKSCache` was documented
+  to refetch the JWKS when a token carried an unknown `kid`, but the refresh returned
+  early whenever the cache was non-empty and within `jwks_cache_ttl`. After a key
+  rotation in Keycloak, every token signed with the new key was rejected with **502**
+  until the TTL expired — up to an hour with the default `jwks_cache_ttl=3600`.
+
+  An unknown `kid` now forces a refetch. Forced refetches are throttled to one per
+  10 seconds (`MIN_FORCED_REFRESH_INTERVAL`), so tokens with made-up `kid`s cannot
+  turn every request into a call to Keycloak; concurrent requests on the same new
+  key share a single fetch.
+
+- **`jwks_cache_ttl=0` now works.** The configuration accepted it, but every request
+  then failed with `JWKSFetchError` (502): the lookup after a refresh treated the
+  keys it had just fetched as already expired. With `0`, the JWKS is now fetched on
+  every request, as the setting implies.
 
 ## Tests
 
-- 212 unit and 22 integration tests. The new integration tests add ES256 and EdDSA
-  key providers through the Admin REST API; both fail against 0.3.3.
-- `make test-integration` timeout raised from 120 s to 300 s: a cold Keycloak
-  container start can exceed 120 s.
+- Regression tests for both fixes, each verified to fail against the unfixed code:
+  rotation on a warm cache, concurrent requests on a rotated key, the throttle and
+  its reset, and a TTL-expiry refresh not counting toward the throttle. 197 unit and
+  20 integration tests.
+- Two cache tests asked for a missing `kid` outside their mocked fetch and passed only
+  because no refetch happened; they now keep the call inside the mock.
 
 ## Upgrading
 
-No changes needed. If you configured a WAF or client to detect auth failures by body
-text, the `WWW-Authenticate` header is now the standard signal.
+No API or configuration changes. If you lowered `jwks_cache_ttl` to work around
+rotation failures, you can restore the default.
