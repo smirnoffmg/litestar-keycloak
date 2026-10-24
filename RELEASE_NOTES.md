@@ -1,64 +1,35 @@
-# v0.3.2
+# v0.3.3
 
-Patch release. Two hardening changes to how bearer tokens are rejected: 401
-response bodies no longer disclose validation details, and a new opt-in
-`strict_audience` setting stops accepting tokens that were issued for another API.
+Patch release. Fixes JWKS key rotation, which did not work in 0.3.2 and earlier.
 
-## Security
+## Bug fixes
 
-- **401 responses no longer reveal why a token was rejected.** The body used to
-  carry the exception text: the expected issuer and the one in the token, the full
-  list of accepted audiences (your internal client IDs), and PyJWT error messages.
-  Any unauthenticated caller could read them. The body is now one of three fixed
-  messages:
+- **Rotated signing keys are now picked up immediately.** `JWKSCache` was documented
+  to refetch the JWKS when a token carried an unknown `kid`, but the refresh returned
+  early whenever the cache was non-empty and within `jwks_cache_ttl`. After a key
+  rotation in Keycloak, every token signed with the new key was rejected with **502**
+  until the TTL expired — up to an hour with the default `jwks_cache_ttl=3600`.
 
-  | Situation                                                  | Body                                   |
-  | ---------------------------------------------------------- | -------------------------------------- |
-  | Token expired                                              | `{"error": "Token expired"}`           |
-  | No token in the request                                    | unchanged, e.g. `{"error": "No token found in header"}` |
-  | Any other failure: issuer, audience, `typ`, signature, algorithm, malformed JWT | `{"error": "Invalid token"}` |
+  An unknown `kid` now forces a refetch. Forced refetches are throttled to one per
+  10 seconds (`MIN_FORCED_REFRESH_INTERVAL`), so tokens with made-up `kid`s cannot
+  turn every request into a call to Keycloak; concurrent requests on the same new
+  key share a single fetch.
 
-  Status codes and the `{"error": ...}` shape are unchanged, and so are 403
-  (missing roles or scopes) and 502 (Keycloak unreachable) bodies.
-
-  The detailed reason now goes to the `litestar_keycloak.exceptions` logger at
-  `INFO`, for example:
-
-  ```
-  Authentication failed: InvalidIssuerError: Expected issuer 'https://kc.example.com/realms/my-realm', got 'https://other.example.com/realms/my-realm'
-  ```
-
-  Requests without a token are not logged. The raw token is never logged.
-
-## Added
-
-- **`strict_audience` setting, default `False`.** By default the plugin accepts a
-  token whose `aud` names another service as long as `azp` is your client or one
-  of `optional_audiences`. Default Keycloak realms depend on this, because
-  Keycloak does not put the requesting client into the access token's `aud`.
-  With `strict_audience=True`, only `aud` counts: the token must list your
-  `audience` (or `client_id`) or one of `optional_audiences`, and a token without
-  `aud` is rejected with 401 `{"error": "Invalid token"}` at request time.
-
-  Before enabling it, add an Audience mapper (`oidc-audience-mapper`) to every
-  client that requests tokens for your API. The steps are in
-  [Service-to-service](docs/guides/service-to-service.md#requiring-the-audience-in-aud-strict_audience).
+- **`jwks_cache_ttl=0` now works.** The configuration accepted it, but every request
+  then failed with `JWKSFetchError` (502): the lookup after a refresh treated the
+  keys it had just fetched as already expired. With `0`, the JWKS is now fetched on
+  every request, as the setting implies.
 
 ## Tests
 
-- 192 unit tests (was 177): both audience modes, the exact 401 bodies for each
-  failure type, the log line, and route-level checks that a wrong-issuer token
-  gets `{"error": "Invalid token"}` while a 403 body still names the missing role.
-- Integration tests are unchanged: the default audience behaviour is the same as
-  in 0.3.1.
+- Regression tests for both fixes, each verified to fail against the unfixed code:
+  rotation on a warm cache, concurrent requests on a rotated key, the throttle and
+  its reset, and a TTL-expiry refresh not counting toward the throttle. 197 unit and
+  20 integration tests.
+- Two cache tests asked for a missing `kid` outside their mocked fetch and passed only
+  because no refetch happened; they now keep the call inside the mock.
 
 ## Upgrading
 
-No API changes; `strict_audience` defaults to `False`, so token acceptance is the
-same as in 0.3.1.
-
-- If your clients, tests or monitoring match on 401 message text, switch them to
-  the three messages above, or to the status code. For the detailed reason, read
-  the `litestar_keycloak.exceptions` logger at `INFO`.
-- To adopt strict mode: add the Audience mapper in Keycloak, check that a fresh
-  token's `aud` contains your client ID, then set `strict_audience=True`.
+No API or configuration changes. If you lowered `jwks_cache_ttl` to work around
+rotation failures, you can restore the default.
