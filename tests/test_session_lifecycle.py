@@ -11,7 +11,11 @@ from litestar.stores.memory import MemoryStore
 from litestar.testing import TestClient
 
 from litestar_keycloak import CurrentUser
-from tests.conftest import _TEST_PRIVATE_KEY, MockKeycloakPlugin, create_test_token
+from litestar_keycloak.testing import (
+    _TEST_PRIVATE_KEY,
+    MockKeycloakPlugin,
+    create_test_token,
+)
 
 BACKCHANNEL_EVENT = "http://schemas.openid.net/event/backchannel-logout"
 

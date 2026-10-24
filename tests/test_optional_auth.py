@@ -9,7 +9,7 @@ from litestar_keycloak import (
     OptionalRawToken,
     OptionalTokenPayload,
 )
-from tests.conftest import MockKeycloakPlugin, create_test_token
+from litestar_keycloak.testing import MockKeycloakPlugin, create_test_token
 
 
 @get("/feed", optional_auth=True)

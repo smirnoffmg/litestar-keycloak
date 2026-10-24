@@ -156,7 +156,7 @@ litestar deprecates it and removes it in 3.0.
 
 ## Testing
 
-- **Unit tests** — Use `create_test_token()` and `MockKeycloakPlugin()` from `tests/conftest.py` so no Keycloak server is needed.
+- **Unit tests** — Use `create_test_token()` and `MockKeycloakPlugin()` from `litestar_keycloak.testing` so no Keycloak server is needed.
 - **Integration tests** — Use testcontainers and the realm export under `tests/fixtures/`.
 
 See [Testing](guides/testing.md).

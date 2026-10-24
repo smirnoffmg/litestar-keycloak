@@ -21,10 +21,9 @@ marker. Litestar deprecation warnings are promoted to errors via `filterwarnings
 
 ```
 tests/
-├── conftest.py                 # public testing API: create_test_token, MockKeycloakPlugin
 ├── test_plugin.py              # plugin registration (drives on_app_init directly)
 ├── test_routes.py              # OIDC routes with mocked Keycloak calls
-├── test_testing_api.py         # the public helpers in conftest.py (nothing else uses them)
+├── test_testing_api.py         # the public litestar_keycloak.testing helpers
 ├── test_optional_auth.py       # optional_auth routes, end to end with MockKeycloakPlugin
 ├── test_session_lifecycle.py   # session auto-refresh and back-channel logout, end to end
 ├── fixtures/realm-export.json  # realm imported by the container
@@ -68,18 +67,18 @@ asked for.
 
 ## Fixtures
 
-### `tests/conftest.py` — the public testing API
+### `litestar_keycloak.testing` — the public testing API
 
-Documented in `docs/guides/testing.md` for **downstream users** of the package. `tests/
-test_testing_api.py` is the only thing exercising them — it exists because a regression here
-(the plugin raising on shutdown) was otherwise invisible to the suite. Keep the signatures
-stable, and keep that file passing.
+Shipped in the package (since 0.3.6) and documented in `docs/guides/testing.md` for
+**downstream users**; the top-level tests import it like any user would. `tests/
+test_testing_api.py` exercises it the way the guide does — it exists because a regression
+here (the plugin raising on shutdown) was otherwise invisible to the suite. Keep the
+signatures stable, and keep that file passing.
 
 - `create_test_token(sub, realm_roles, exp_offset, iss, aud, typ, headers, **extra_claims)` —
-  mints a JWT signed with a fixed module-level RSA key.
+  mints a JWT signed with an RSA key generated at import.
 - `MockKeycloakPlugin(server_url, realm, client_id, **kwargs)` — a `KeycloakPlugin` whose JWKS
   cache serves that same key, so apps can be tested with no Keycloak running.
-- Exposed as fixtures `create_test_token_factory` / `mock_keycloak_plugin_factory`.
 
 ### `tests/unit/conftest.py`
 

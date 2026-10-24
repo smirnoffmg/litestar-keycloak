@@ -1,15 +1,15 @@
-"""Tests for the testing helpers (create_test_token, MockKeycloakPlugin).
+"""Tests for the public testing helpers in litestar_keycloak.testing.
 
-docs/guides/testing.md tells downstream users to copy them from tests/conftest.py
-(they are not shipped in the package); nothing else in this suite exercises them
-the way that guide does, so regressions here are invisible without this file.
+docs/guides/testing.md documents them for downstream test suites; nothing else in
+this suite exercises them the way that guide does, so regressions here are
+invisible without this file.
 """
 
 from litestar import Litestar, get
 from litestar.testing import TestClient
 
 from litestar_keycloak import CurrentUser
-from tests.conftest import MockKeycloakPlugin, create_test_token
+from litestar_keycloak.testing import MockKeycloakPlugin, create_test_token
 
 
 @get("/me")

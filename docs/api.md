@@ -127,3 +127,15 @@ Annotate handler parameters with these; the parameter names must stay
     options:
       show_source: true
       show_root_heading: true
+
+## Testing
+
+::: litestar_keycloak.testing.create_test_token
+    options:
+      show_source: true
+      show_root_heading: true
+
+::: litestar_keycloak.testing.MockKeycloakPlugin
+    options:
+      show_source: true
+      show_root_heading: true

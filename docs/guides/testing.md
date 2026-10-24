@@ -2,14 +2,14 @@
 
 ## Unit tests (no Keycloak)
 
-This repository's **tests/conftest.py** has helpers that need no real Keycloak server. They are not part of the installed package — `from tests.conftest import …` works only inside this repository — so copy `create_test_token` and `MockKeycloakPlugin` into your own `conftest.py`.
+`litestar_keycloak.testing` (since 0.3.6) has helpers that need no real Keycloak server: `create_test_token` signs tokens with a key that exists only in the test process, and `MockKeycloakPlugin` is the real plugin with that key in place of the realm's JWKS. Guards, dependencies, routes and error responses behave as in production.
 
 ### create_test_token()
 
 Builds a JWT signed with a fixed test key. Use it with **MockKeycloakPlugin** so validation succeeds without JWKS.
 
 ```python
-from tests.conftest import create_test_token, MockKeycloakPlugin
+from litestar_keycloak.testing import create_test_token, MockKeycloakPlugin
 from litestar import Litestar, get
 from litestar.testing import TestClient
 from litestar_keycloak import CurrentUser
@@ -28,11 +28,11 @@ def test_me():
     assert resp.json()["roles"] == ["admin"]
 ```
 
-You can pass extra claims: `create_test_token(..., email="u@example.com", **kwargs)`.
+You can pass extra claims: `create_test_token(..., email="u@example.com", **kwargs)`; `exp_offset=-60` gives an expired token. Its defaults (`iss`, `aud`) match the defaults of `MockKeycloakPlugin()`.
 
 ### MockKeycloakPlugin()
 
-A plugin that validates tokens using the same test key as `create_test_token()`. No HTTP calls to Keycloak; no JWKS fetch. Optional kwargs match **KeycloakConfig** (e.g. `server_url`, `realm`, `client_id`) for consistency but are not used for network calls.
+A plugin that validates tokens using the same test key as `create_test_token()`. No JWKS fetch. Keyword arguments are any **KeycloakConfig** fields (e.g. `include_routes=True`, `strict_audience=True`); calls that do reach Keycloak — the auth routes, introspection, service tokens — still need it mocked.
 
 ## Integration tests (real Keycloak)
 

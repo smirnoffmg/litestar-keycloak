@@ -13,7 +13,7 @@ from litestar.stores.memory import MemoryStore
 from litestar.testing import TestClient
 
 from litestar_keycloak import KeycloakConfig, KeycloakPlugin, require_roles
-from tests.conftest import MockKeycloakPlugin, create_test_token
+from litestar_keycloak.testing import MockKeycloakPlugin, create_test_token
 
 
 def _config_with_routes(**kwargs):
