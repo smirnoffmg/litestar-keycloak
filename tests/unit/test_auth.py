@@ -268,9 +268,7 @@ async def test_cookie_location_missing_cookie_raises():
     conn = _connection(cookies={})
     with pytest.raises(MissingTokenError) as exc_info:
         await middleware.authenticate_request(conn)
-    assert "cookie" in str(exc_info.value).lower() or "access_token" in str(
-        exc_info.value
-    )
+    assert str(exc_info.value) == "No token found in cookie 'access_token'"
     verifier.verify.assert_not_called()
 
 

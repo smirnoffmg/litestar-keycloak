@@ -133,9 +133,10 @@ def test_login_redirect_includes_client_id_and_redirect_uri(app_with_routes):
         resp = client.get("/auth/login", follow_redirects=False)
     assert resp.status_code in (302, 307)
     location = resp.headers.get("location", "")
-    assert "client_id=test-app" in location or "client_id=" in location
-    assert "redirect_uri=" in location
-    assert "state=" in location
+    params = urllib.parse.parse_qs(urllib.parse.urlparse(location).query)
+    assert params["client_id"] == ["test-app"]
+    assert params["redirect_uri"] == ["http://localhost:8000/auth/callback"]
+    assert params["state"][0]
     assert "keycloak.example.com" in location and "openid-connect/auth" in location
 
 

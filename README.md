@@ -48,7 +48,7 @@ app = Litestar(
 )
 ```
 
-Any route that declares `current_user: CurrentUser` requires a valid Bearer token.
+Every route requires a valid Bearer token unless it is excluded (`excluded_paths`, `exclude_patterns`, `exclude_from_auth=True`) or marked `optional_auth=True`; declaring `current_user: CurrentUser` only gives the handler the user.
 
 ## Guards
 

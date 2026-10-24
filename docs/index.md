@@ -4,12 +4,12 @@ Keycloak OIDC/OAuth2 authentication plugin for [Litestar](https://litestar.dev/)
 
 ## Features
 
-- **JWKS caching** — Fetches and caches Keycloak's JSON Web Key Set with configurable TTL; retries once on key rotation.
-- **Bearer token validation** — Reads the token from the `Authorization` header or a cookie; validates signature, issuer, audience, and expiry.
-- **Guards** — Realm roles, client roles, and scopes with ALL/ANY match strategies.
+- **JWKS caching** — Fetches and caches Keycloak's JSON Web Key Set with configurable TTL; picks up rotated keys at once and keeps verifying with cached keys while Keycloak is unreachable.
+- **Bearer token validation** — Reads the token from the `Authorization` header or a cookie; validates signature (RSA, EC, Ed25519), issuer, audience, type and expiry; optional introspection for immediate revocation.
+- **Guards** — Realm roles, client roles, groups and scopes with ALL/ANY match strategies; step-up (`acr`, recent login) and arbitrary predicates.
 - **Dependency injection** — `KeycloakUser`, `TokenPayload`, and raw token string are available as request dependencies.
-- **Optional OIDC routes** — Mount `/auth/login`, `/auth/callback`, `/auth/logout`, `/auth/refresh` when `include_routes=True` (requires session middleware).
-- **Service-to-service** — Accept tokens from multiple audiences (e.g. a service client) via `optional_audiences`; supports client_credentials and token forwarding.
+- **Optional OIDC routes** — Mount `/auth/login`, `/auth/callback`, `/auth/logout`, `/auth/refresh` when `include_routes=True`, with PKCE, ID token checks, session auto-refresh and back-channel logout; session middleware is needed only for `callback_response_mode="redirect"`.
+- **Service-to-service** — Accept tokens from multiple audiences via `optional_audiences`; obtain outbound tokens with client_credentials or token exchange (`service_tokens`).
 
 ## Installation
 

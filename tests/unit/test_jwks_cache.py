@@ -441,3 +441,11 @@ async def test_malformed_jwks_is_a_fetch_error(body):
         pytest.raises(JWKSFetchError),
     ):
         await cache.get_key("kid-1")
+
+
+async def test_fetch_jwks_returns_a_valid_key_set():
+    http = KeycloakHttpClient(10)
+    cache = JWKSCache("http://example.com/jwks", ttl=3600, http=http)
+    jwks = _jwks_response("kid-1")
+    with patch.object(http, "get_json", new_callable=AsyncMock, return_value=jwks):
+        assert (await cache.get_key("kid-1")).key_id == "kid-1"

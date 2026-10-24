@@ -11,7 +11,7 @@ Two layers, one principle: **unit tests prove the logic, integration tests prove
 | Unit        | `pytest` (default)      | unmarked                   | None — fake JWTs, in-memory JWKS    | ~2s     |
 | Integration | `pytest -m integration` | `@pytest.mark.integration` | Keycloak container (testcontainers) | ~60s+   |
 
-Current state: **362 tests across 29 files** — 327 unit, 35 integration — at **99% coverage**.
+Current state: **426 tests across 29 files** — 390 unit, 36 integration — at **99% coverage**.
 
 Integration tests are **excluded by default** (`addopts = "-m 'not integration'"`), so a bare
 `pytest` is always the fast path. `asyncio_mode = "auto"` means `async def test_*` needs no
@@ -50,18 +50,18 @@ Measured with `uv run pytest --cov=litestar_keycloak --cov-report=term-missing` 
 | ----------------- | ----- | -------- | --------- |
 | `__init__.py`     | —     | 100%     | |
 | `auth.py`         | 15    | 100%     | |
-| `config.py`       | 25    | 100%     | |
+| `config.py`       | 46    | 100%     | |
 | `dependencies.py` | 4     | 74%      | `50-57` — litestar < 2.23 import shim |
-| `exceptions.py`   | 27    | 100%     | |
-| `guards.py`       | 27    | 100%     | |
+| `exceptions.py`   | 31    | 100%     | |
+| `guards.py`       | 34    | 100%     | |
 | `introspection.py`| 11    | 100%     | |
 | `service_tokens.py`| 14   | 100%     | |
-| `http_client.py`  | 10    | 97%      | `31->33` — lock double-check branch |
+| `http_client.py`  | 10    | 98%      | `31->33` — lock double-check branch |
 | `models.py`       | 32    | 100%     | |
-| `plugin.py`       | 13    | 100%     | |
-| `routes.py`       | 41    | 100%     | |
-| `token.py`        | 52    | 100%     | |
-| **Total**         | 327   | **99%**  | |
+| `plugin.py`       | 15    | 100%     | |
+| `routes.py`       | 66    | 100%     | |
+| `token.py`        | 88    | 100%     | |
+| **Total**         | 390   | **99%**  | |
 
 There is no `fail_under` threshold; `--cov` is not in `addopts`, so coverage runs only when
 asked for.

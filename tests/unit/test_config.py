@@ -431,3 +431,8 @@ def test_optional_audiences_without_strict_audience_is_logged(caplog):
     with caplog.at_level(logging.WARNING, logger="litestar_keycloak.config"):
         _cfg(optional_audiences=frozenset({"frontend-spa"}), strict_audience=True)
     assert caplog.text == ""
+
+
+def test_validate_id_token_requires_openid_scope():
+    with pytest.raises(ValueError, match="openid"):
+        _cfg(validate_id_token=True, scopes=("profile",))

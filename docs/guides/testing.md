@@ -2,7 +2,7 @@
 
 ## Unit tests (no Keycloak)
 
-Use the helpers in **tests/conftest.py** so you don't need a real Keycloak server.
+This repository's **tests/conftest.py** has helpers that need no real Keycloak server. They are not part of the installed package — `from tests.conftest import …` works only inside this repository — so copy `create_test_token` and `MockKeycloakPlugin` into your own `conftest.py`.
 
 ### create_test_token()
 
