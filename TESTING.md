@@ -11,7 +11,10 @@ Two layers, one principle: **unit tests prove the logic, integration tests prove
 | Unit        | `pytest` (default)      | unmarked                   | None — fake JWTs, in-memory JWKS    | ~2s     |
 | Integration | `pytest -m integration` | `@pytest.mark.integration` | Keycloak container (testcontainers) | ~60s+   |
 
-Current state: **426 tests across 29 files** — 390 unit, 36 integration — at **99% coverage**.
+Current state: **441 tests across 34 files** — 395 unit, 46 integration — at **99% coverage**.
+
+Which journeys of the plugin's users these tests walk, step by step, is mapped in
+[JOURNEYS.md](JOURNEYS.md); a new feature adds its steps there and the test that checks them.
 
 Integration tests are **excluded by default** (`addopts = "-m 'not integration'"`), so a bare
 `pytest` is always the fast path. `asyncio_mode = "auto"` means `async def test_*` needs no
@@ -32,6 +35,7 @@ tests/
 │   └── test_{auth,config,dependencies,exceptions,guards,http_client,introspection,jwks_cache,logout,models,service_tokens,token}.py
 └── integration/
     ├── conftest.py             # Keycloak container, config, token, admin_api, browser_login, probe_user fixtures
+    ├── test_journey_{spa,web,visitor,services,operations}.py  # JOURNEYS.md, B1–B8: whole journeys, one test each
     └── test_{guards_integration,identity,jwks_refresh,key_types,login_hardening,oidc_flow,outbound_tokens,revocation,routes_integration,scenarios,session_lifecycle,token_validation}.py
 ```
 
@@ -57,10 +61,11 @@ Measured with `uv run pytest --cov=litestar_keycloak --cov-report=term-missing` 
 | `service_tokens.py`| 14   | 100%     | |
 | `http_client.py`  | 10    | 98%      | `31->33` — lock double-check branch |
 | `models.py`       | 32    | 100%     | |
-| `plugin.py`       | 15    | 100%     | |
+| `plugin.py`       | 19    | 100%     | |
 | `routes.py`       | 66    | 100%     | |
 | `token.py`        | 88    | 100%     | |
-| **Total**         | 390   | **99%**  | |
+| `testing.py`      | 5     | 100%     | |
+| **Total**         | 395   | **99%**  | |
 
 There is no `fail_under` threshold; `--cov` is not in `addopts`, so coverage runs only when
 asked for.

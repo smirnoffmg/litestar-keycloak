@@ -75,8 +75,8 @@ def _audience_mapper(target: str) -> dict:
 
 
 @pytest.mark.timeout(300)
-def test_exchange_turns_the_callers_token_into_one_for_another_service(keycloak_26_4):
-    """frontend token -> this API -> exchanged token for billing, same user."""
+def test_exchange_journey(keycloak_26_4):
+    """B6: frontend token -> orders-api -> exchanged token that billing accepts."""
     base_url = keycloak_26_4.get_url()
     admin_token = httpx.post(
         f"{base_url}/realms/master/protocol/openid-connect/token",
@@ -138,22 +138,49 @@ def test_exchange_turns_the_callers_token_into_one_for_another_service(keycloak_
         await service_tokens.exchange(raw_token, audience="test-app")
         return {}
 
-    config = KeycloakConfig(
-        server_url=base_url,
-        realm="test-realm",
-        client_id="orders-api",
-        client_secret="orders-secret",
-        strict_audience=True,
-    )
-    app = Litestar(route_handlers=[orders, unrelated], plugins=[KeycloakPlugin(config)])
-    bearer = {"Authorization": f"Bearer {user_token}"}
-    with TestClient(app) as client:
-        body = client.get("/orders", headers=bearer).json()
-        refused = client.get("/orders/unrelated", headers=bearer)
+    @get("/invoices")
+    async def invoices(current_user: CurrentUser) -> dict:
+        return {"user": current_user.sub, "via": current_user.azp}
 
-    exchanged = jwt.decode(body["billing_token"], options={"verify_signature": False})
-    assert exchanged["aud"] == "billing"
-    assert exchanged["azp"] == "orders-api"
-    assert exchanged["sub"] == body["user"]
-    assert refused.status_code == 502
-    assert "not available" not in refused.text
+    def service(client_id: str, secret: str, *handlers) -> TestClient:
+        config = KeycloakConfig(
+            server_url=base_url,
+            realm="test-realm",
+            client_id=client_id,
+            client_secret=secret,
+            strict_audience=True,
+        )
+        return TestClient(
+            Litestar(route_handlers=list(handlers), plugins=[KeycloakPlugin(config)])
+        )
+
+    def bearer(token: str) -> dict[str, str]:
+        return {"Authorization": f"Bearer {token}"}
+
+    with (
+        service("orders-api", "orders-secret", orders, unrelated) as orders_api,
+        service("billing", "billing-secret", invoices) as billing,
+    ):
+        # B6.1–2. The user calls orders-api, which exchanges the token for billing.
+        body = orders_api.get("/orders", headers=bearer(user_token)).json()
+        exchanged = jwt.decode(
+            body["billing_token"], options={"verify_signature": False}
+        )
+        assert exchanged["aud"] == "billing"
+
+        # B6.3. billing, with its own plugin, accepts it: the same user, via orders.
+        invoice = billing.get("/invoices", headers=bearer(body["billing_token"]))
+        assert invoice.status_code == 200, invoice.text
+        assert invoice.json() == {"user": body["user"], "via": "orders-api"}
+
+        # B6.4. billing refuses the user's original token: not addressed to it.
+        assert billing.get("/invoices", headers=bearer(user_token)).status_code == 401
+
+        # B6.5. orders-api refuses the exchanged token: not addressed to it.
+        replayed = orders_api.get("/orders", headers=bearer(body["billing_token"]))
+        assert replayed.status_code == 401
+
+        # B6.6. An audience this client may not exchange for: generic 502.
+        refused = orders_api.get("/orders/unrelated", headers=bearer(user_token))
+        assert refused.status_code == 502
+        assert refused.json() == {"error": "Keycloak request failed"}

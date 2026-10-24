@@ -65,3 +65,13 @@ def test_mock_plugin_supports_service_tokens():
     )
     with TestClient(app) as client:
         assert client.get("/svc").json() == {"ok": True}
+
+
+def test_tokens_the_mock_cannot_verify_are_401():
+    """A foreign kid, or a token without typ, is refused as by the real plugin."""
+    with TestClient(_app()) as client:
+        foreign = create_test_token(headers={"kid": "other-kid"})
+        untyped = create_test_token(typ=None)
+        for token in (foreign, untyped):
+            resp = client.get("/me", headers={"Authorization": f"Bearer {token}"})
+            assert resp.status_code == 401
