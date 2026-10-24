@@ -126,6 +126,17 @@ class KeycloakConfig:
     post_logout_redirect_uri: str | None = None
     """Where ``redirect``-mode logout redirects.  Returns JSON status when ``None``."""
 
+    use_pkce: bool = False
+    """Send a PKCE ``S256`` code challenge on login (RFC 7636) and prove it on
+    the code exchange.  Required for public clients; harmless and recommended
+    for confidential ones.  Keycloak can enforce it per client (Advanced →
+    "Proof Key for Code Exchange Code Challenge Method")."""
+
+    validate_id_token: bool = False
+    """Send an OIDC ``nonce`` on login and, in the callback, require the
+    returned ID token to be valid for this client and carry that nonce.
+    Requires ``"openid"`` in ``scopes``."""
+
     # -- advanced ----------------------------------------------------------
     audience: str | None = None
     """Expected ``aud`` claim.  Defaults to ``client_id`` when ``None``."""
@@ -275,3 +286,5 @@ class KeycloakConfig:
             raise ValueError("token_introspection requires client_secret")
         if self.introspection_cache_ttl < 0:
             raise ValueError("introspection_cache_ttl must be non-negative")
+        if self.validate_id_token and "openid" not in self.scopes:
+            raise ValueError('validate_id_token requires "openid" in scopes')

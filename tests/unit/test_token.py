@@ -429,3 +429,72 @@ async def test_verify_introspects_after_local_validation(
     with pytest.raises(TokenExpiredError):
         await verifier.verify(make_token(exp_offset=-60))
     introspector.ensure_active.assert_not_awaited()
+
+
+# --- ID token (OIDC Core 3.1.3.7) ---
+
+
+def _id_token(rsa_keypair, **overrides) -> str:
+    private_key, _ = rsa_keypair
+    claims = _claims(typ="ID", azp="test-app", nonce="n-1")
+    claims.update(overrides)
+    claims = {k: v for k, v in claims.items() if v is not None}
+    return jwt.encode(
+        claims, private_key, algorithm="RS256", headers={"kid": "test-kid"}
+    )
+
+
+async def test_verify_id_token_returns_claims(token_verifier, rsa_keypair):
+    claims = await token_verifier.verify_id_token(_id_token(rsa_keypair), nonce="n-1")
+    assert claims["sub"] == "user-1"
+
+
+@pytest.mark.parametrize(
+    ("overrides", "error"),
+    [
+        ({"nonce": "other"}, TokenDecodeError),
+        ({"nonce": None}, TokenDecodeError),
+        ({"typ": "Bearer"}, InvalidTokenTypeError),
+        ({"iss": "https://evil/realms/test-realm"}, InvalidIssuerError),
+        ({"aud": "other-app", "azp": "other-app"}, InvalidAudienceError),
+        ({"aud": ["test-app", "other-app"], "azp": "other-app"}, InvalidAudienceError),
+        ({"exp": int(time.time()) - 60}, TokenExpiredError),
+    ],
+    ids=["nonce", "no-nonce", "typ", "iss", "aud", "azp", "exp"],
+)
+async def test_verify_id_token_rejects(token_verifier, rsa_keypair, overrides, error):
+    """A replayed, foreign or stale ID token must not complete a login."""
+    with pytest.raises(error):
+        await token_verifier.verify_id_token(
+            _id_token(rsa_keypair, **overrides), nonce="n-1"
+        )
+
+
+async def test_verify_id_token_checks_client_id_not_optional_audiences(
+    keycloak_config, mock_jwks_cache, rsa_keypair
+):
+    """An ID token is for this client only; extra API audiences do not count."""
+    config = dataclasses.replace(
+        keycloak_config, optional_audiences=frozenset({"other-app"})
+    )
+    verifier = TokenVerifier(config, mock_jwks_cache)
+    token = _id_token(rsa_keypair, aud="other-app", azp="other-app")
+    with pytest.raises(InvalidAudienceError):
+        await verifier.verify_id_token(token, nonce="n-1")
+
+
+async def test_verify_id_token_rejects_empty_expected_nonce(
+    token_verifier, rsa_keypair
+):
+    """A lost nonce cookie must not let a nonce-less ID token through."""
+    with pytest.raises(TokenDecodeError):
+        await token_verifier.verify_id_token(
+            _id_token(rsa_keypair, nonce=None), nonce=""
+        )
+
+
+async def test_verify_id_token_non_ascii_nonce_is_rejected_not_crashed(
+    token_verifier, rsa_keypair
+):
+    with pytest.raises(TokenDecodeError):
+        await token_verifier.verify_id_token(_id_token(rsa_keypair), nonce="я")

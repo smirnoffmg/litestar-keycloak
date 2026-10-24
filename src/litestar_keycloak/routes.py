@@ -17,6 +17,9 @@ in a short-lived HttpOnly cookie, so no session middleware is required for the
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import re
 import secrets
 import urllib.parse
 from typing import TYPE_CHECKING, Any
@@ -33,9 +36,20 @@ if TYPE_CHECKING:
 
     from litestar_keycloak.config import KeycloakConfig
     from litestar_keycloak.http_client import KeycloakHttpClient
+    from litestar_keycloak.token import TokenVerifier
 
 #: Name of the short-lived HttpOnly cookie holding the OAuth ``state`` value.
 STATE_COOKIE_NAME = "kc_oauth_state"
+
+#: Short-lived HttpOnly cookies for the PKCE verifier and the OIDC nonce.
+#: Separate from the state cookie so a login begun before ``use_pkce`` or
+#: ``validate_id_token`` was switched on still completes.
+PKCE_COOKIE_NAME = "kc_oauth_pkce"
+NONCE_COOKIE_NAME = "kc_oauth_nonce"
+
+#: RFC 6749 §4.1.2.1 limits ``error`` to printable ASCII; echo only a safe
+#: subset, since the value arrives in the attacker-controllable query string.
+_ERROR_CODE_RE = re.compile(r"[A-Za-z0-9_.-]{1,64}")
 
 #: Lifetime (seconds) of the OAuth ``state`` cookie — long enough to complete
 #: the round trip to Keycloak, short enough to bound replay.
@@ -43,7 +57,7 @@ _STATE_COOKIE_MAX_AGE = 300
 
 
 def build_auth_controller(
-    config: KeycloakConfig, http: KeycloakHttpClient
+    config: KeycloakConfig, http: KeycloakHttpClient, verifier: TokenVerifier
 ) -> type[Controller]:
     """Factory that returns a Litestar ``Controller`` wired to *config*.
 
@@ -62,18 +76,28 @@ def build_auth_controller(
         async def login(self, request: Request[Any, Any, Any]) -> Redirect:
             """Redirect the user to Keycloak's authorization endpoint."""
             state = secrets.token_urlsafe(32)
+            params = {
+                "response_type": "code",
+                "client_id": config.client_id,
+                "redirect_uri": config.redirect_uri,
+                "scope": " ".join(config.scopes),
+                "state": state,
+            }
+            cookies = [_flow_cookie(config, STATE_COOKIE_NAME, state)]
+            if config.use_pkce:
+                verifier_value = secrets.token_urlsafe(64)
+                params["code_challenge"] = _s256(verifier_value)
+                params["code_challenge_method"] = "S256"
+                cookies.append(_flow_cookie(config, PKCE_COOKIE_NAME, verifier_value))
+            if config.validate_id_token:
+                nonce = secrets.token_urlsafe(32)
+                params["nonce"] = nonce
+                cookies.append(_flow_cookie(config, NONCE_COOKIE_NAME, nonce))
 
-            params = urllib.parse.urlencode(
-                {
-                    "response_type": "code",
-                    "client_id": config.client_id,
-                    "redirect_uri": config.redirect_uri,
-                    "scope": " ".join(config.scopes),
-                    "state": state,
-                }
-            )
-            response = Redirect(f"{config.authorization_url}?{params}")
-            response.set_cookie(_state_cookie(config, state))
+            query = urllib.parse.urlencode(params)
+            response = Redirect(f"{config.authorization_url}?{query}")
+            for cookie in cookies:
+                response.set_cookie(cookie)
             return response
 
         @get("/callback")
@@ -88,15 +112,36 @@ def build_auth_controller(
             """
             code = request.query_params.get("code")
             state = request.query_params.get("state")
+            error = request.query_params.get("error")
 
+            if error:
+                code_name = error if _ERROR_CODE_RE.fullmatch(error) else "invalid"
+                raise NotAuthorizedException(
+                    detail=f"Authorization failed: {code_name}"
+                )
             if not code:
                 raise NotAuthorizedException(detail="Missing authorization code")
 
             saved_state = request.cookies.get(STATE_COOKIE_NAME)
-            if not state or state != saved_state:
+            # Bytes, not str: compare_digest raises on non-ASCII str input.
+            if not state or not secrets.compare_digest(
+                state.encode(), (saved_state or "").encode()
+            ):
                 raise NotAuthorizedException(detail="Invalid OAuth state")
 
-            token_data = await _exchange_code(config, code, http=http)
+            token_data = await _exchange_code(
+                config,
+                code,
+                http=http,
+                code_verifier=request.cookies.get(PKCE_COOKIE_NAME),
+            )
+            if config.validate_id_token:
+                id_token = token_data.get("id_token")
+                if not id_token:
+                    raise NotAuthorizedException(detail="Missing ID token")
+                await verifier.verify_id_token(
+                    id_token, nonce=request.cookies.get(NONCE_COOKIE_NAME, "")
+                )
 
             response: Response[dict[str, Any]] | Redirect
             if redirect_mode:
@@ -105,7 +150,8 @@ def build_auth_controller(
             else:
                 response = Response(content=token_data)
 
-            response.delete_cookie(STATE_COOKIE_NAME, path=config.auth_prefix)
+            for name in (STATE_COOKIE_NAME, PKCE_COOKIE_NAME, NONCE_COOKIE_NAME):
+                response.delete_cookie(name, path=config.auth_prefix)
             return response
 
         @post("/logout")
@@ -171,17 +217,31 @@ def build_auth_controller(
 # ---------------------------------------------------------------------------
 
 
-def _state_cookie(config: KeycloakConfig, state: str) -> Cookie:
-    """Build the short-lived HttpOnly cookie holding the OAuth ``state``."""
+def _flow_cookie(config: KeycloakConfig, name: str, value: str) -> Cookie:
+    """Build a short-lived HttpOnly cookie for one login transaction value."""
     return Cookie(
-        key=STATE_COOKIE_NAME,
-        value=state,
+        key=name,
+        value=value,
         httponly=True,
         secure=config.cookie_secure,
         samesite=config.cookie_samesite,
         max_age=_STATE_COOKIE_MAX_AGE,
         path=config.auth_prefix,
     )
+
+
+def _s256(verifier: str) -> str:
+    """PKCE ``S256`` challenge: unpadded base64url of the verifier's SHA-256."""
+    digest = hashlib.sha256(verifier.encode("ascii")).digest()
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+
+
+def _client_auth(config: KeycloakConfig) -> dict[str, str]:
+    """``client_id`` plus ``client_secret`` — the latter only for confidential
+    clients, since a public client sending an empty secret is malformed."""
+    if config.client_secret is None:
+        return {"client_id": config.client_id}
+    return {"client_id": config.client_id, "client_secret": config.client_secret}
 
 
 def _session(request: Request[Any, Any, Any]) -> dict[str, Any]:
@@ -218,20 +278,22 @@ async def _token_request(
 
 
 async def _exchange_code(
-    config: KeycloakConfig, code: str, *, http: KeycloakHttpClient
+    config: KeycloakConfig,
+    code: str,
+    *,
+    http: KeycloakHttpClient,
+    code_verifier: str | None = None,
 ) -> dict[str, Any]:
     """Exchange an authorization code for tokens."""
-    return await _token_request(
-        config,
-        {
-            "grant_type": "authorization_code",
-            "client_id": config.client_id,
-            "client_secret": config.client_secret or "",
-            "redirect_uri": config.redirect_uri or "",
-            "code": code,
-        },
-        http=http,
-    )
+    form = {
+        "grant_type": "authorization_code",
+        **_client_auth(config),
+        "redirect_uri": config.redirect_uri or "",
+        "code": code,
+    }
+    if code_verifier:
+        form["code_verifier"] = code_verifier
+    return await _token_request(config, form, http=http)
 
 
 async def _refresh_token(
@@ -242,8 +304,7 @@ async def _refresh_token(
         config,
         {
             "grant_type": "refresh_token",
-            "client_id": config.client_id,
-            "client_secret": config.client_secret or "",
+            **_client_auth(config),
             "refresh_token": refresh_token,
         },
         http=http,
@@ -260,9 +321,5 @@ async def _keycloak_logout(
     """
     await http.post_form_discard(
         config.logout_url,
-        {
-            "client_id": config.client_id,
-            "client_secret": config.client_secret or "",
-            "refresh_token": refresh_token,
-        },
+        {**_client_auth(config), "refresh_token": refresh_token},
     )

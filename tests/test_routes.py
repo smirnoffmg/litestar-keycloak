@@ -1,5 +1,7 @@
 """Tests for OIDC auth routes (login, callback, logout, refresh) with mocked HTTP."""
 
+import base64
+import hashlib
 import urllib.parse
 from unittest.mock import AsyncMock, patch
 
@@ -547,3 +549,167 @@ def test_missing_role_keeps_403_detail():
         resp = client.get("/admin", headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 403
     assert resp.json() == {"error": "Missing roles: admin"}
+
+
+# -- PKCE (RFC 7636) -----------------------------------------------------------
+
+
+def _authorize_params(resp) -> dict[str, str]:
+    query = urllib.parse.urlparse(resp.headers["location"]).query
+    return {k: v[0] for k, v in urllib.parse.parse_qs(query).items()}
+
+
+def _s256(verifier: str) -> str:
+    digest = hashlib.sha256(verifier.encode("ascii")).digest()
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+
+
+def test_login_without_pkce_sends_no_challenge(app_with_routes):
+    with TestClient(app_with_routes) as client:
+        resp = client.get("/auth/login", follow_redirects=False)
+    assert "code_challenge" not in _authorize_params(resp)
+    assert _set_cookie_header(resp, "kc_oauth_pkce") == ""
+
+
+def test_pkce_challenge_matches_verifier_sent_on_exchange():
+    """The verifier kept in an HttpOnly cookie hashes to the challenge sent."""
+    app = Litestar(plugins=[KeycloakPlugin(_config_with_routes(use_pkce=True))])
+    with (
+        TestClient(app) as client,
+        patch(
+            "litestar_keycloak.routes._exchange_code",
+            new_callable=AsyncMock,
+            return_value={"access_token": "at"},
+        ) as exchange,
+    ):
+        login = client.get("/auth/login", follow_redirects=False)
+        params = _authorize_params(login)
+        cookie = _set_cookie_header(login, "kc_oauth_pkce")
+        callback = client.get(f"/auth/callback?code=c&state={params['state']}")
+    assert params["code_challenge_method"] == "S256"
+    assert "HttpOnly" in cookie and "Path=/auth" in cookie
+    verifier = exchange.await_args.kwargs["code_verifier"]
+    assert 43 <= len(verifier) <= 128
+    assert _s256(verifier) == params["code_challenge"]
+    assert callback.status_code == 200
+    assert 'kc_oauth_pkce=""' in _set_cookie_header(callback, "kc_oauth_pkce")
+
+
+async def test_exchange_code_sends_code_verifier_only_when_given():
+    from litestar_keycloak.routes import _exchange_code
+
+    http = _FakeHttp()
+    await _exchange_code(_config_with_routes(), "c", http=http, code_verifier="v")
+    await _exchange_code(_config_with_routes(), "c", http=http)
+    assert http.post_calls[0][1]["code_verifier"] == "v"
+    assert "code_verifier" not in http.post_calls[1][1]
+
+
+# -- public clients --------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("helper", "args"),
+    [
+        ("_exchange_code", ("code",)),
+        ("_refresh_token", ("rt",)),
+        ("_keycloak_logout", ("rt",)),
+    ],
+)
+async def test_public_client_sends_no_client_secret(helper, args):
+    """A public client has no secret; an empty one must not be sent."""
+    from litestar_keycloak import routes
+
+    http = _FakeHttp()
+    await getattr(routes, helper)(_config_with_routes(), *args, http=http)
+    await getattr(routes, helper)(
+        _config_with_routes(client_secret="s3cret"), *args, http=http
+    )
+    assert "client_secret" not in http.post_calls[0][1]
+    assert http.post_calls[1][1]["client_secret"] == "s3cret"
+
+
+# -- authorization errors returned by Keycloak -----------------------------------
+
+
+def test_callback_reports_keycloak_error_instead_of_missing_code(app_with_routes):
+    """A denied consent or failed login names the OAuth error code."""
+    with TestClient(app_with_routes) as client:
+        state = _login_state(client)
+        resp = client.get(
+            f"/auth/callback?error=access_denied&error_description=x&state={state}"
+        )
+    assert resp.status_code == 401
+    assert "access_denied" in resp.json()["detail"]
+
+
+def test_callback_error_code_is_not_reflected_verbatim(app_with_routes):
+    """Only an RFC 6749 error-code charset is echoed back."""
+    with TestClient(app_with_routes) as client:
+        state = _login_state(client)
+        resp = client.get("/auth/callback?error=%3Cscript%3E&state=" + state)
+    assert resp.status_code == 401
+    assert "<script>" not in resp.text
+
+
+# -- nonce + ID token (OIDC Core 3.1.3.7) ----------------------------------------
+
+
+def _id_token_app():
+    return Litestar(
+        plugins=[
+            MockKeycloakPlugin(
+                include_routes=True,
+                redirect_uri="http://localhost:8000/auth/callback",
+                cookie_secure=False,
+                validate_id_token=True,
+            )
+        ]
+    )
+
+
+def _login_with_id_token(client, id_token_for_nonce):
+    login = client.get("/auth/login", follow_redirects=False)
+    params = _authorize_params(login)
+    tokens = {"access_token": "at", "id_token": id_token_for_nonce(params.get("nonce"))}
+    with patch(
+        "litestar_keycloak.routes._exchange_code",
+        new_callable=AsyncMock,
+        return_value=tokens,
+    ):
+        return params, client.get(f"/auth/callback?code=c&state={params['state']}")
+
+
+def test_login_sends_nonce_and_callback_accepts_matching_id_token():
+    with TestClient(_id_token_app()) as client:
+        params, resp = _login_with_id_token(
+            client,
+            lambda nonce: create_test_token(typ="ID", azp="test-app", nonce=nonce),
+        )
+    assert params["nonce"]
+    assert resp.status_code == 200
+    assert 'kc_oauth_nonce=""' in _set_cookie_header(resp, "kc_oauth_nonce")
+
+
+@pytest.mark.parametrize(
+    "make_id_token",
+    [
+        lambda nonce: create_test_token(typ="ID", azp="test-app", nonce="replayed"),
+        lambda nonce: create_test_token(typ="ID", azp="test-app"),
+        lambda nonce: None,
+    ],
+    ids=["wrong-nonce", "no-nonce", "no-id-token"],
+)
+def test_callback_rejects_bad_or_missing_id_token(make_id_token):
+    """A login whose ID token does not prove this transaction is refused."""
+    with TestClient(_id_token_app()) as client:
+        _, resp = _login_with_id_token(client, make_id_token)
+    assert resp.status_code == 401
+
+
+def test_callback_non_ascii_state_is_401_not_500(app_with_routes):
+    """compare_digest raises on non-ASCII str; the comparison must not."""
+    with TestClient(app_with_routes) as client:
+        _login_state(client)
+        resp = client.get("/auth/callback?code=c&state=%D1%8F")
+    assert resp.status_code == 401

@@ -11,6 +11,7 @@ typed exceptions on failure.
 from __future__ import annotations
 
 import asyncio
+import hmac
 import logging
 import time
 from typing import TYPE_CHECKING, Any
@@ -235,6 +236,41 @@ class TokenVerifier:
             await self._introspector.ensure_active(raw_token)
 
         return TokenPayload.from_claims(claims)
+
+    async def verify_id_token(self, raw_token: str, *, nonce: str) -> dict[str, Any]:
+        """Validate an ID token from the code exchange (OIDC Core 3.1.3.7).
+
+        Unlike an access token, an ID token is addressed to this client alone
+        (``aud`` must contain ``client_id``; ``optional_audiences`` do not
+        count) and must carry the *nonce* this login sent, which binds it to
+        the transaction and defeats replay.
+        """
+        kid, alg = self._read_header(raw_token)
+        signing_key = await self._jwks_cache.get_key(kid)
+        _check_alg_matches_key(alg, kid, signing_key)
+        claims = self._decode(raw_token, signing_key)
+
+        client_id = self._config.client_id
+        actual_typ = claims.get("typ", "")
+        if self._config.expected_token_type is not None and actual_typ != "ID":
+            raise InvalidTokenTypeError(expected="ID", got=str(actual_typ))
+        if claims.get("iss", "") != self._config.issuer:
+            raise InvalidIssuerError(
+                expected=self._config.issuer, got=claims.get("iss", "")
+            )
+        aud = claims.get("aud", "")
+        audiences = aud if isinstance(aud, list) else [aud]
+        azp = claims.get("azp")
+        if client_id not in audiences or (
+            (azp is not None or len(audiences) > 1) and azp != client_id
+        ):
+            raise InvalidAudienceError(expected=client_id, got=aud)
+        # Bytes, not str: compare_digest raises on non-ASCII str input.
+        expected = nonce.encode()
+        actual = str(claims.get("nonce", "")).encode()
+        if not nonce or not hmac.compare_digest(actual, expected):
+            raise TokenDecodeError("ID token nonce does not match the login")
+        return claims
 
     # -- internals ---------------------------------------------------------
 

@@ -22,6 +22,15 @@ The routes behave according to **callback_response_mode**:
 
 The `state` value used to mitigate CSRF is stored in a short-lived HttpOnly cookie (`kc_oauth_state`), set by `/auth/login` and verified by `/auth/callback`. It honors `cookie_secure` (default `True` — set `False` only for plain-HTTP local development) and `cookie_samesite` (default `"lax"`). No session middleware is required for state.
 
+## PKCE and ID token validation
+
+Two opt-in settings harden the code flow:
+
+- **`use_pkce=True`** — `/auth/login` adds a `code_challenge` (`S256`) and keeps the verifier in a short-lived HttpOnly cookie (`kc_oauth_pkce`); `/auth/callback` sends it with the code exchange. Keycloak can *require* PKCE per client (*Advanced → Proof Key for Code Exchange Code Challenge Method → S256*); then a login without it fails at Keycloak, and the callback answers `401` with `Authorization failed: invalid_request`. A **public client** (no `client_secret`) should always use PKCE — its code exchange is otherwise unauthenticated.
+- **`validate_id_token=True`** — `/auth/login` adds a random `nonce` (cookie `kc_oauth_nonce`), and `/auth/callback` refuses the login (`401`) unless the token response holds an ID token that is signed by the realm, issued by `issuer`, addressed to `client_id` (`aud`/`azp`), unexpired and carrying that nonce.
+
+Both cookies follow `cookie_secure` / `cookie_samesite` like the `state` cookie and are cleared by the callback. If Keycloak redirects back with `?error=` (denied consent, refused request), the callback answers `401` naming the error code.
+
 ## Redirect mode: session middleware required
 
 `"redirect"` mode stores tokens in the server-side session, and the auth middleware reads the access token from the session on subsequent requests. You must add Litestar session middleware; the plugin's auth middleware is registered so it runs **after** it.

@@ -111,7 +111,7 @@ class KeycloakPlugin(InitPluginProtocol):
 
         # -- OIDC routes ---------------------------------------------------
         if self._config.include_routes:
-            controller = build_auth_controller(self._config, self._http)
+            controller = build_auth_controller(self._config, self._http, self._verifier)
             app_config.route_handlers.append(controller)
 
         # -- lifespan: warm JWKS on startup, close HTTP client on shutdown --

@@ -36,6 +36,8 @@ All plugin behavior is controlled by **KeycloakConfig**, a frozen dataclass. Onl
 | `post_logout_redirect_uri`| `None`       | Where `"redirect"`-mode logout redirects; returns JSON status when `None`.                                    |
 | `cookie_secure`          | `True`        | `Secure` flag on the OAuth `state` cookie. Set `False` for plain-HTTP local dev.                              |
 | `cookie_samesite`        | `"lax"`       | `SameSite` on the OAuth `state` cookie.                                                                       |
+| `use_pkce`               | `False`       | Send a PKCE `S256` challenge on login and its verifier on the code exchange (RFC 7636). **Enable it for public clients**; recommended for confidential ones. |
+| `validate_id_token`      | `False`       | Send an OIDC `nonce` on login and require the callback's ID token to be valid for this client and carry that nonce. Requires `"openid"` in `scopes`. |
 
 For the redirect-mode flow (session middleware, endpoint behavior) see the [OIDC routes guide](guides/oidc-routes.md).
 
@@ -134,6 +136,7 @@ Endpoint URLs are built from the template above — the plugin does not fetch th
 - `leeway < 0` -> `ValueError`.
 - `token_introspection=True` and `client_secret=None` -> `ValueError`.
 - `introspection_cache_ttl < 0` -> `ValueError`.
+- `validate_id_token=True` without `"openid"` in `scopes` -> `ValueError`.
 
 ## Example
 
