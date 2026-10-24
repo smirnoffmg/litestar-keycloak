@@ -1,137 +1,109 @@
-# v0.3.4
+# v0.3.5
 
-Feature release covering the Keycloak features 0.3.3 lacked: EC and Ed25519 keys,
-group and step-up guards, optional authentication, immediate revocation through
-introspection, PKCE and ID token checks, session auto-refresh, back-channel logout,
-and outbound service tokens. No breaking changes: every behaviour change is an
-opt-in flag defaulting to the 0.3.3 behaviour, and every new field has a default.
+Hardening release from a security review of 0.3.4. It fixes requests any client
+could turn into a `500` or a leak of internal details, keeps authentication
+working while Keycloak is briefly unreachable, and adds opt-in protection against
+session fixation. No breaking changes: new protections are opt-in flags, and the
+remaining changes turn crashes into the `401`/`502` they should have been.
 
-## Token verification
+## Security
 
-- **EC and Ed25519 signing keys.** The JWKS cache used to skip every non-RSA key, so
-  a realm with an `ecdsa-generated` or `eddsa-generated` key provider had all its
-  tokens rejected. Such keys now load; add the algorithm to `algorithms`, e.g.
-  `algorithms=("RS256", "ES256")`. EC keys published for encryption (`ECDH-ES`) are
-  skipped.
+- **`session_binding`** (default off, `callback_response_mode="redirect"` only).
+  Litestar keeps the session id across login and accepts any id a browser
+  presents, so an attacker who planted a `session` cookie in the victim's browser
+  shared the victim's login. With this flag the callback also sets an HttpOnly
+  `kc_session_binding` cookie and keeps its SHA-256 in the session; the session's
+  tokens are accepted only alongside it. **Recommended for every redirect-mode
+  app.** Users signed in before it is switched on log in once more; the cookie
+  lasts until the browser closes.
 
-- **`leeway`** (default `0`). Seconds of clock skew tolerated when checking `exp`,
-  `nbf` and `iat`.
+- **`502` bodies no longer echo internal details.** They named Keycloak's internal
+  URL and the network error to unauthenticated callers. The body is now
+  `{"error": "Keycloak request failed"}`; the detail is logged at `WARNING` on
+  `litestar_keycloak.exceptions`.
 
-- **`WWW-Authenticate` challenges (RFC 6750).** `401` without a token carries a bare
-  `Bearer`; a rejected token carries `error="invalid_token"` (plus
-  `error_description="Token expired"` when expired); `403` carries
-  `error="insufficient_scope"`. The response bodies are unchanged.
+- **`require_sub`** (default off). Refuse a token without `sub` instead of using
+  `preferred_username`, which Keycloak 25+ hands out instead of `sub` when a client
+  lacks the `basic` scope and which can be reassigned.
 
-- **Denied requests are logged.** A `403` or a step-up `401` is logged at `WARNING`
-  on the `litestar_keycloak.exceptions` logger with the method, path and the
-  caller's `sub` — route that logger to your security event log if denials must be
-  audited.
-
-## Identity and guards
-
-- **More of the token on `KeycloakUser`:** `iss`, `azp`, `groups`, `acr`,
-  `auth_time`, `sid`, `is_service_account`, and `has_group()`. `TokenPayload` exposes
-  `acr`, `auth_time` and `sid` as properties over `extra`, so code reading them from
-  `extra` keeps working. Groups come from `groups_claim` (default `"groups"`), the
-  claim named on Keycloak's Group Membership mapper.
-
-- **New guards:** `require_groups` (ALL/ANY), `require_acr`,
-  `require_recent_auth(max_age)` and `require_user(predicate)`. The step-up guards
-  answer `401` with an RFC 9470 challenge (`insufficient_user_authentication`,
-  `acr_values` or `max_age`), since the user can pass by signing in again.
-  `require_recent_auth` fails closed without `auth_time`, which Keycloak adds only
-  through the `basic` scope and only for interactive logins.
-
-- **Optional authentication.** A handler marked `optional_auth=True` serves
-  requests without a token, with `current_user`, `token_payload` and `raw_token` set
-  to `None`; a token that is present must still be valid. Annotate with
-  `OptionalCurrentUser`, `OptionalTokenPayload`, `OptionalRawToken`: a plain
-  `CurrentUser` on such a route fails anonymous requests with a 500.
-
-## Immediate revocation
-
-- **`token_introspection`** (default off). A locally verified JWT stays valid until
-  `exp` after its session is logged out or its user disabled. With this flag every
-  token that passes local validation is also checked at Keycloak's introspection
-  endpoint (RFC 7662); anything but `active: true` is a `401`. Junk tokens are
-  refused locally first, without a call to Keycloak. It fails closed: an unreachable
-  endpoint or rejected client credentials is a `502`. Requires `client_secret`.
-
-- **`introspection_cache_ttl`** (default `0`, ask on every request) reuses positive
-  answers for that many seconds, at most 10 000 tokens. Negative answers are not
-  cached.
-
-## Login flow
-
-- **`use_pkce`** (default off) adds an S256 code challenge to `/auth/login` and sends
-  the verifier on the code exchange (RFC 7636).
-
-- **`validate_id_token`** (default off, requires the `openid` scope) adds a `nonce`
-  and makes the callback refuse a login unless the response holds an ID token signed
-  by the realm, issued by `issuer`, addressed to `client_id`, unexpired and carrying
-  that nonce (OIDC Core 3.1.3.7).
-
-- **The callback reports Keycloak's `?error=`** — denied consent, a refused request —
-  as `401 Authorization failed: <code>` instead of "Missing authorization code".
-
-- **Public clients no longer send an empty `client_secret`** on code exchange,
-  refresh and logout.
-
-## Session lifecycle
-
-- **`session_auto_refresh`** (default off, `callback_response_mode="redirect"` only).
-  An expired access token read from the session is renewed with the refresh token and
-  written back; the request continues. A refresh Keycloak rejects is a `401`, any
-  other failure a `502`. Bearer header tokens are never refreshed.
-
-- **`backchannel_logout`** (default off, requires `include_routes`) mounts
-  `POST {auth_prefix}/backchannel-logout`. It verifies Keycloak's logout token (OIDC
-  Back-Channel Logout 1.0) and records the ended session in the `logout_store`
-  Litestar store (in-memory by default — **register a shared store when running
-  several instances**). From then on every token of that session is a `401`. Set the
-  client's *Backchannel logout URL* in Keycloak to this endpoint.
-
-  A refused session is not cleared from the session cookie — Litestar renders auth
-  middleware errors outside the session middleware — but every request is refused
-  until the next login overwrites it.
-
-## Service-to-service
-
-- **`service_tokens`**, injected as `ServiceTokens` or reached as
-  `plugin.service_tokens`. Requires a confidential client.
-  - `await service_tokens.client_token(scope=None)` — a `client_credentials` token
-    for calling other services as this app, cached per scope and renewed before it
-    expires; concurrent callers share one request.
-  - `await service_tokens.exchange(token, audience="billing")` — RFC 8693 token
-    exchange: the caller's token becomes one for the downstream service, for the same
-    user. Needs Keycloak 26.2+ with standard token exchange enabled on the client.
-  - A refusal or an unreachable Keycloak raises `ServiceTokenError` (`502`); the body
-    names only the OAuth error code.
+- **Warning for lenient audiences.** `optional_audiences` without
+  `strict_audience=True` is logged at `WARNING`: the lenient check also accepts any
+  token whose `azp` is an optional audience, whatever its `aud`. Consider
+  `strict_audience=True`; it becomes the default in 0.4.
 
 ## Bug fixes
 
-- **A token whose `alg` does not match its key type is a `401`, not a `500`.** With
-  keys of several types in the JWKS, a token with `alg: RS256` pointing at an EC
-  `kid` reached PyJWT as an unhandled `InvalidKeyError`.
+- **Token endpoint failures are `401`/`502`, not `500`.** A reused authorization
+  code, an expired refresh token, an unreachable Keycloak or a malformed request
+  body crashed `/auth/callback`, `/auth/refresh` and `/auth/logout`. Keycloak
+  refusing a grant is now a `401`, any other failure a `502`. Logout stays
+  best-effort: it completes locally even if Keycloak cannot be reached.
 
-- **Concurrent requests on a cold or expired JWKS cache fetch it once.** Since 0.3.3
-  a second coroutine waiting on the refresh lock fetched the JWKS again; the test
-  meant to catch this never actually ran its coroutines concurrently.
+- **A token with an unknown `kid` is a `401`, not a `502`.** It raises
+  `UnknownSigningKeyError`, which is still a `JWKSFetchError`, so existing
+  `except` clauses keep catching it.
+
+- **An `ES256` token on a P-384 key is a `401`, not a `500`.** The alg check now
+  compares the EC curve as well as the key type.
+
+- **Tokens without `exp` or `iat` are a `401`.** Access tokens crashed with a
+  `500`; ID tokens without `exp` were accepted.
+
+- **Authentication survives a Keycloak outage.** When the JWKS fetch failed, each
+  waiting request repeated it in turn, so N concurrent requests took N times the
+  HTTP timeout; and after the TTL, cached keys were dropped before a replacement
+  arrived. Waiting requests now share one attempt, no new fetch is tried for 5
+  seconds after a failure, and cached keys keep verifying tokens while Keycloak
+  cannot be reached.
+
+- **Concurrent requests on a cold or expired JWKS cache fetch it once** (0.3.3
+  fetched it twice).
+
+- **A guard on an anonymous `optional_auth` request is a `401`** with a `Bearer`
+  challenge, not `403 Missing roles: `.
+
+- **Token responses carry `Cache-Control: no-store`** (RFC 6749 §5.1) on
+  `/auth/callback` and `/auth/refresh` in JSON mode.
+
+## New
+
+- **`/auth/login` passes on `acr_values`, `max_age` and `prompt`**, so an app can
+  answer its own step-up challenge (`401 insufficient_user_authentication`) by
+  sending the user to `/auth/login?acr_values=2` or `?max_age=300`. Values are
+  checked against strict patterns.
+
+## Configuration checks
+
+`KeycloakConfig` now raises `ValueError` for settings that could not work:
+
+- `cookie_samesite="none"` without `cookie_secure=True` — browsers drop the cookie,
+  so every login failed its state check;
+- an `auth_prefix` with a trailing slash — `/auth/login` then demanded a token;
+- `algorithms` without any `RS*`, `PS*`, `ES*` or `EdDSA` entry. `HS*` or `none`
+  next to them is logged at `WARNING`.
+
+## Documentation
+
+The README, `docs/index.md` and the testing guide no longer contradict the code:
+every non-excluded route needs a token (not just those declaring `CurrentUser`),
+session middleware is needed only in redirect mode, and the test helpers live in
+this repository's `tests/conftest.py`, not in the package.
 
 ## Tests
 
-- 327 unit and 35 integration tests, against Keycloak 26.0 and 26.4 (for token
-  exchange). Integration tests drive real browser logins, Keycloak's own logout
-  tokens and Admin REST API changes; each was checked to fail with its feature's
-  code path disabled.
-- `make test-integration` timeout raised from 120 s to 300 s.
+390 unit and 36 integration tests. New integration test: a real browser login into
+a planted session id, then the same id without the binding cookie, gets `401`.
+Two concurrency tests that never actually raced (a bare `AsyncMock` does not yield)
+now do, and fail without the lock.
 
 ## Upgrading
 
-No changes needed. Before enabling the new flags:
+No changes needed. Recommended:
 
-- **Check that your clients have the `basic` client scope.** Without it Keycloak 25+
-  omits `sub` and the plugin falls back to `preferred_username`, which can be
-  reassigned; `require_recent_auth` also needs `auth_time` from that scope.
-- **`backchannel_logout` with more than one instance** needs a shared Litestar store
-  (e.g. Redis) registered under `logout_store`.
+- redirect mode: `session_binding=True`, and `secure=True` on
+  `ServerSideSessionConfig` in production;
+- once every client has the `basic` scope: `require_sub=True`;
+- if you see the `optional_audiences` warning: add an Audience mapper in Keycloak
+  and set `strict_audience=True`.
+
+If you parsed the text of `502` responses, read the log instead.
