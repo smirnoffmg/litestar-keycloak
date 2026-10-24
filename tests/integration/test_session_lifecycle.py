@@ -163,3 +163,40 @@ def test_backchannel_logout_ends_the_session_in_the_app(
         )
         assert resp.status_code == 200, resp.text
         assert client.get("/me", headers=bearer).status_code == 401
+
+
+def test_session_binding_refuses_a_stolen_session_id(
+    keycloak_container, admin_api, browser_login
+):
+    """A real login's session id, replayed without the binding cookie, is a 401."""
+    resp = admin_api.post(
+        "/clients",
+        json={
+            "clientId": "test-binding",
+            "secret": "test-binding-secret",
+            "standardFlowEnabled": True,
+            "redirectUris": [REDIRECT_URI],
+        },
+    )
+    assert resp.status_code in (201, 409), resp.text
+    config = _config(
+        keycloak_container,
+        "test-binding",
+        callback_response_mode="redirect",
+        session_binding=True,
+    )
+    # One client: two TestClients would run the plugin's HTTP client on two
+    # event loops.  The attacker is the same session id minus the binding cookie.
+    with TestClient(_session_app(config)) as client:
+        client.cookies.set("session", "planted-session-id", domain="testserver.local")
+        authorize_url = client.get("/auth/login", follow_redirects=False).headers[
+            "location"
+        ]
+        callback = browser_login(authorize_url, "testuser", "testpass")
+        query = urllib.parse.urlparse(callback).query
+        client.get(f"/auth/callback?{query}", follow_redirects=False)
+        assert client.cookies.get("session") == "planted-session-id"
+        assert client.get("/me").json() == {"username": "testuser"}
+
+        client.cookies.delete("kc_session_binding")
+        assert client.get("/me").status_code == 401

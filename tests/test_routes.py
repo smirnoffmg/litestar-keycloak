@@ -795,3 +795,73 @@ def test_token_responses_are_not_cacheable(app_with_routes):
     assert refreshed.status_code == 201
     assert callback.headers["cache-control"] == "no-store"
     assert refreshed.headers["cache-control"] == "no-store"
+
+
+# --- session_binding: a fixed session id does not hand over the login ---
+
+
+def _bound_app():
+    config = _config_with_routes(
+        callback_response_mode="redirect", session_binding=True
+    )
+    return Litestar(
+        route_handlers=[_session_debug, _me],
+        plugins=[KeycloakPlugin(config)],
+        middleware=[ServerSideSessionConfig().middleware],
+        stores={"sessions": MemoryStore()},
+    )
+
+
+def _accept_any_token():
+    from litestar_keycloak.models import TokenPayload
+
+    payload = TokenPayload(
+        sub="victim",
+        iss="http://keycloak.example.com/realms/test-realm",
+        aud="test-app",
+        exp=9999999999,
+        iat=0,
+    )
+    return patch(
+        "litestar_keycloak.token.TokenVerifier.verify",
+        new_callable=AsyncMock,
+        return_value=payload,
+    )
+
+
+def test_session_binding_defeats_session_fixation():
+    """An attacker who planted the session id cannot use the victim's login."""
+    app = _bound_app()
+    with _accept_any_token(), TestClient(app) as victim, TestClient(app) as attacker:
+        victim.cookies.set("session", "attacker-picked-id")
+        attacker.cookies.set("session", "attacker-picked-id")
+        _complete_login(victim, {"access_token": "at", "refresh_token": "rt"})
+
+        assert victim.get("/me").status_code == 200
+        assert attacker.get("/me").status_code == 401
+        assert attacker.post("/auth/refresh").status_code == 401
+
+
+def test_session_binding_cookie_is_httponly_and_cleared_on_logout():
+    app = _bound_app()
+    with (
+        _accept_any_token(),
+        patch("litestar_keycloak.routes._keycloak_logout", new_callable=AsyncMock),
+        TestClient(app) as client,
+    ):
+        with patch(
+            "litestar_keycloak.routes._exchange_code",
+            new_callable=AsyncMock,
+            return_value={"access_token": "at", "refresh_token": "rt"},
+        ):
+            state = _login_state(client)
+            callback = client.get(
+                f"/auth/callback?code=c&state={state}", follow_redirects=False
+            )
+        binding = _set_cookie_header(callback, "kc_session_binding")
+        assert "HttpOnly" in binding and "Path=/;" in binding
+        logout = client.post("/auth/logout")
+        assert 'kc_session_binding=""' in _set_cookie_header(
+            logout, "kc_session_binding"
+        )
+        assert client.get("/me").status_code == 401

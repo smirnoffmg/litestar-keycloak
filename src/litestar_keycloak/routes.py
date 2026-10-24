@@ -31,7 +31,14 @@ from litestar.datastructures import Cookie
 from litestar.exceptions import NotAuthorizedException, SerializationException
 from litestar.response import Redirect
 
-from litestar_keycloak.auth import SESSION_ACCESS_TOKEN_KEY, SESSION_REFRESH_TOKEN_KEY
+from litestar_keycloak.auth import (
+    BINDING_COOKIE_NAME,
+    SESSION_ACCESS_TOKEN_KEY,
+    SESSION_BINDING_KEY,
+    SESSION_REFRESH_TOKEN_KEY,
+    binding_digest,
+    session_is_bound,
+)
 from litestar_keycloak.exceptions import AuthenticationError, TokenEndpointError
 from litestar_keycloak.logout import record_logout
 
@@ -157,6 +164,8 @@ def build_auth_controller(
             if redirect_mode:
                 _store_session_tokens(request, token_data)
                 response = Redirect(config.post_login_redirect_uri)
+                if config.session_binding:
+                    response.set_cookie(_bind_session(config, request))
             else:
                 response = Response(content=token_data, headers=_NO_STORE)
 
@@ -175,7 +184,7 @@ def build_auth_controller(
             request body.
             """
             if redirect_mode:
-                refresh_token = _session(request).get(SESSION_REFRESH_TOKEN_KEY, "")
+                refresh_token = _session_refresh_token(config, request)
             else:
                 refresh_token = await _body_refresh_token(request)
 
@@ -192,6 +201,8 @@ def build_auth_controller(
                     response = Redirect(config.post_logout_redirect_uri)
                 else:
                     response = Response(content={"status": "logged_out"})
+                if config.session_binding:
+                    response.delete_cookie(BINDING_COOKIE_NAME, path="/")
             else:
                 response = Response(content={"status": "logged_out"})
             return response
@@ -208,7 +219,7 @@ def build_auth_controller(
             returned as JSON.
             """
             if redirect_mode:
-                refresh_token = _session(request).get(SESSION_REFRESH_TOKEN_KEY, "")
+                refresh_token = _session_refresh_token(config, request)
             else:
                 refresh_token = await _body_refresh_token(request)
 
@@ -306,6 +317,30 @@ def _session(request: Request[Any, Any, Any]) -> dict[str, Any]:
     return request.session
 
 
+def _session_refresh_token(
+    config: KeycloakConfig, request: Request[Any, Any, Any]
+) -> str:
+    """The session's refresh token; ``""`` if ``session_binding`` refuses it."""
+    session = _session(request)
+    if config.session_binding and not session_is_bound(request, session):
+        return ""
+    return str(session.get(SESSION_REFRESH_TOKEN_KEY, ""))
+
+
+def _bind_session(config: KeycloakConfig, request: Request[Any, Any, Any]) -> Cookie:
+    """Issue a fresh binding cookie and record its digest in the session."""
+    value = secrets.token_urlsafe(32)
+    _session(request)[SESSION_BINDING_KEY] = binding_digest(value)
+    return Cookie(
+        key=BINDING_COOKIE_NAME,
+        value=value,
+        httponly=True,
+        secure=config.cookie_secure,
+        samesite=config.cookie_samesite,
+        path="/",
+    )
+
+
 def _store_session_tokens(
     request: Request[Any, Any, Any], token_data: dict[str, Any]
 ) -> None:
@@ -320,6 +355,7 @@ def _clear_session_tokens(request: Request[Any, Any, Any]) -> None:
     session = _session(request)
     session.pop(SESSION_ACCESS_TOKEN_KEY, None)
     session.pop(SESSION_REFRESH_TOKEN_KEY, None)
+    session.pop(SESSION_BINDING_KEY, None)
 
 
 # ---------------------------------------------------------------------------

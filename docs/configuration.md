@@ -37,6 +37,7 @@ All plugin behavior is controlled by **KeycloakConfig**, a frozen dataclass. Onl
 | `cookie_secure`          | `True`        | `Secure` flag on the OAuth `state` cookie. Set `False` for plain-HTTP local dev.                              |
 | `cookie_samesite`        | `"lax"`       | `SameSite` on the OAuth `state` cookie.                                                                       |
 | `session_auto_refresh`   | `False`       | `"redirect"` mode only: renew an expired session access token with the session's refresh token instead of answering `401`. See [OIDC routes](guides/oidc-routes.md#session-lifecycle). |
+| `session_binding`        | `False`       | `"redirect"` mode only: bind the session's tokens to an HttpOnly cookie set at login, so a session id planted by an attacker does not share the victim's login. **Recommended for redirect mode.** See [OIDC routes](guides/oidc-routes.md#session-fixation). |
 | `backchannel_logout`     | `False`       | Mount `POST {auth_prefix}/backchannel-logout` for Keycloak's back-channel logout and refuse tokens from sessions it ends. Requires `include_routes=True`. |
 | `logout_store`           | `"keycloak_logout"` | Litestar store that records back-channel logouts. In-memory per process by default — register a shared store under this name for several instances. |
 | `use_pkce`               | `False`       | Send a PKCE `S256` challenge on login and its verifier on the code exchange (RFC 7636). **Enable it for public clients**; recommended for confidential ones. |
@@ -140,6 +141,7 @@ Endpoint URLs are built from the template above — the plugin does not fetch th
 - `token_introspection=True` and `client_secret=None` -> `ValueError`.
 - `introspection_cache_ttl < 0` -> `ValueError`.
 - `session_auto_refresh=True` without `callback_response_mode="redirect"` -> `ValueError`.
+- `session_binding=True` without `callback_response_mode="redirect"` -> `ValueError`.
 - `backchannel_logout=True` without `include_routes=True` -> `ValueError`.
 - `validate_id_token=True` without `"openid"` in `scopes` -> `ValueError`.
 

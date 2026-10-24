@@ -9,6 +9,9 @@ Unauthenticated requests are rejected before they reach any route handler.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import logging
 from typing import TYPE_CHECKING, Any
 
 import aiohttp
@@ -43,6 +46,29 @@ RAW_TOKEN_STATE_KEY = "keycloak_raw_token"
 #: present in the header/cookie.
 SESSION_ACCESS_TOKEN_KEY = "keycloak_access_token"
 SESSION_REFRESH_TOKEN_KEY = "keycloak_refresh_token"
+
+#: ``session_binding``: the HttpOnly cookie set at login, and the session key
+#: holding its SHA-256, without which the session's tokens are not accepted.
+BINDING_COOKIE_NAME = "kc_session_binding"
+SESSION_BINDING_KEY = "keycloak_session_binding"
+
+logger = logging.getLogger(__name__)
+
+
+def binding_digest(value: str) -> str:
+    """The SHA-256 of a binding cookie value, as kept in the session."""
+    return hashlib.sha256(value.encode()).hexdigest()
+
+
+def session_is_bound(
+    connection: ASGIConnection[Any, Any, Any, Any], session: dict[str, Any]
+) -> bool:
+    """Whether the request carries the binding cookie this session was issued."""
+    expected = session.get(SESSION_BINDING_KEY)
+    cookie = connection.cookies.get(BINDING_COOKIE_NAME)
+    if not isinstance(expected, str) or not cookie:
+        return False
+    return hmac.compare_digest(binding_digest(cookie).encode(), expected.encode())
 
 
 def create_auth_middleware(
@@ -183,7 +209,7 @@ def _extract_token(
             return _extract_from_header(connection)
         return _extract_from_cookie(connection, config.cookie_name)
     except MissingTokenError:
-        token = _extract_from_session(connection)
+        token = _extract_from_session(connection, config)
         if token:
             return token
         raise
@@ -191,19 +217,25 @@ def _extract_token(
 
 def _extract_from_session(
     connection: ASGIConnection[Any, Any, Any, Any],
+    config: KeycloakConfig,
 ) -> str | None:
     """Return the access token stored in the session, or ``None``.
 
     Reads ``scope`` directly (rather than ``connection.session``, which raises
     when no session middleware is installed) so the fallback is a no-op for
-    header/cookie-only apps.
+    header/cookie-only apps.  With ``session_binding``, a token in a session
+    whose binding cookie is missing or wrong is ignored.
     """
     session = _session_dict(connection)
-    if session is not None:
-        token = session.get(SESSION_ACCESS_TOKEN_KEY)
-        if token:
-            return str(token)
-    return None
+    if session is None:
+        return None
+    token = session.get(SESSION_ACCESS_TOKEN_KEY)
+    if not token:
+        return None
+    if config.session_binding and not session_is_bound(connection, session):
+        logger.info("Ignoring session tokens without their binding cookie")
+        return None
+    return str(token)
 
 
 def _extract_from_header(

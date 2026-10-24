@@ -39,6 +39,12 @@ Both cookies follow `cookie_secure` / `cookie_samesite` like the `state` cookie 
 
 Keycloak must be able to reach the endpoint, and it carries no bearer token (the plugin excludes it from authentication). If you enable Litestar's CSRF middleware, exclude this path from it too. Records are kept for 24 hours in an in-memory store by default; with several app instances, register a shared store (e.g. Redis) as `logout_store`, or a logout reaches only the instance Keycloak happened to call.
 
+### Session fixation
+
+Litestar's server-side sessions keep their id when the user logs in, and accept any id a browser presents, including one that is not in the store yet. An attacker who can plant a `session` cookie in the victim's browser — from a sibling subdomain, or over plain HTTP, since Litestar's session cookie is not `Secure` by default — and who then waits for the victim to log in, shares that login.
+
+Set `session_binding=True` to close this. The callback then also sets an HttpOnly `kc_session_binding` cookie with a fresh random value and keeps its SHA-256 in the session; session tokens are accepted, refreshed and logged out only alongside that cookie. The attacker knows the session id but not the value. The cookie lasts until the browser closes, and users signed in before the flag was switched on must log in once more. Other data your app keeps in the session is not covered; also set `secure=True` on `ServerSideSessionConfig` in production.
+
 ## Redirect mode: session middleware required
 
 `"redirect"` mode stores tokens in the server-side session, and the auth middleware reads the access token from the session on subsequent requests. You must add Litestar session middleware; the plugin's auth middleware is registered so it runs **after** it.

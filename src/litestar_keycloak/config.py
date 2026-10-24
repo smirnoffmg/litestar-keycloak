@@ -136,7 +136,16 @@ class KeycloakConfig:
     """In ``"redirect"`` mode, renew an expired access token from the session
     with its refresh token instead of answering 401, and write the new tokens
     back to the session.  A refresh Keycloak rejects (session ended, refresh
-    token expired) clears the session's tokens and answers 401."""
+    token expired) answers 401; the stale tokens stay in the session until the
+    next login replaces them."""
+
+    session_binding: bool = False
+    """In ``"redirect"`` mode, bind the session's tokens to an HttpOnly cookie
+    set at login and accept them only alongside it.  Litestar keeps the session
+    id across login, so without it an attacker who planted a session id in the
+    victim's browser shares the victim's login (session fixation).  The cookie
+    lasts until the browser closes; sessions from before it was switched on
+    must log in again."""
 
     backchannel_logout: bool = False
     """Mount ``POST {auth_prefix}/backchannel-logout`` for Keycloak's OIDC
@@ -307,6 +316,10 @@ class KeycloakConfig:
         if self.session_auto_refresh and self.callback_response_mode != "redirect":
             raise ValueError(
                 'session_auto_refresh requires callback_response_mode="redirect"'
+            )
+        if self.session_binding and self.callback_response_mode != "redirect":
+            raise ValueError(
+                'session_binding requires callback_response_mode="redirect"'
             )
         if self.backchannel_logout and not self.include_routes:
             raise ValueError("backchannel_logout requires include_routes=True")

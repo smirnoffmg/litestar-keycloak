@@ -372,3 +372,10 @@ def test_backchannel_logout_path_skips_auth():
         in _routes(backchannel_logout=True).effective_excluded_paths
     )
     assert "/auth/backchannel-logout" not in _routes().effective_excluded_paths
+
+
+def test_session_binding_requires_redirect_mode():
+    with pytest.raises(ValueError, match="session_binding"):
+        KeycloakConfig(
+            server_url="http://kc", realm="r", client_id="c", session_binding=True
+        )
