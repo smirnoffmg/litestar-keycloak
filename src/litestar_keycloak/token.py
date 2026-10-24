@@ -51,6 +51,15 @@ BACKCHANNEL_LOGOUT_EVENT = "http://schemas.openid.net/event/backchannel-logout"
 #: JWK ``kty`` that verifies each JWS ``alg`` family, keyed by the alg's first
 #: two letters (``RS``/``PS`` RSA, ``ES`` ECDSA, ``Ed`` EdDSA).
 _KTY_BY_ALG_FAMILY = {"RS": "RSA", "PS": "RSA", "ES": "EC", "Ed": "OKP"}
+_CURVE_BY_EC_ALG = {
+    "ES256": "secp256r1",
+    "ES256K": "secp256k1",
+    "ES384": "secp384r1",
+    "ES512": "secp521r1",
+}
+
+#: Claims every access and ID token must carry; ``TokenPayload`` needs both.
+_REQUIRED_CLAIMS = ("exp", "iat")
 
 
 class JWKSCache:
@@ -203,6 +212,13 @@ def _check_alg_matches_key(alg: str, kid: str, key: PyJWK) -> None:
         raise TokenDecodeError(
             f"Token alg {alg!r} cannot be verified with {key.key_type} key {kid!r}"
         )
+    # PyJWT checks the curve too, but raises InvalidKeyError, which stays a 500.
+    expected_curve = _CURVE_BY_EC_ALG.get(alg)
+    if key.key_type == "EC" and expected_curve != key.key.curve.name:
+        raise TokenDecodeError(
+            f"Token alg {alg!r} cannot be verified with {key.key.curve.name} "
+            f"key {kid!r}"
+        )
 
 
 class TokenVerifier:
@@ -239,7 +255,7 @@ class TokenVerifier:
         signing_key = await self._jwks_cache.get_key(kid)
         _check_alg_matches_key(alg, kid, signing_key)
 
-        claims = self._decode(raw_token, signing_key)
+        claims = self._decode(raw_token, signing_key, require=_REQUIRED_CLAIMS)
         self._validate_claims(claims)
         if self._introspector is not None:
             await self._introspector.ensure_active(raw_token)
@@ -257,7 +273,7 @@ class TokenVerifier:
         kid, alg = self._read_header(raw_token)
         signing_key = await self._jwks_cache.get_key(kid)
         _check_alg_matches_key(alg, kid, signing_key)
-        claims = self._decode(raw_token, signing_key)
+        claims = self._decode(raw_token, signing_key, require=_REQUIRED_CLAIMS)
 
         client_id = self._config.client_id
         actual_typ = claims.get("typ", "")
@@ -336,7 +352,9 @@ class TokenVerifier:
             raise TokenDecodeError("JWT header missing 'kid'")
         return str(kid), str(headers.get("alg", ""))
 
-    def _decode(self, raw_token: str, signing_key: PyJWK) -> dict[str, Any]:
+    def _decode(
+        self, raw_token: str, signing_key: PyJWK, *, require: tuple[str, ...] = ()
+    ) -> dict[str, Any]:
         try:
             return jwt.decode(
                 raw_token,
@@ -348,6 +366,7 @@ class TokenVerifier:
                     "verify_iat": True,
                     "verify_aud": False,  # we validate aud ourselves
                     "verify_iss": False,  # we validate iss ourselves
+                    "require": list(require),
                 },
             )
         except jwt.ExpiredSignatureError as exc:

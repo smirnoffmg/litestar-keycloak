@@ -396,6 +396,30 @@ async def test_verify_rejects_alg_from_another_key_family(
         await verifier.verify(token)
 
 
+async def test_verify_rejects_ec_alg_for_another_curve(keycloak_config):
+    """ES256 on a P-384 kid is a 401; PyJWT's curve check would raise a 500."""
+    signer = ec.generate_private_key(ec.SECP256R1())
+    p384 = ec.generate_private_key(ec.SECP384R1()).public_key()
+    jwk = PyJWK({**ECAlgorithm.to_jwk(p384, as_dict=True), "kid": "p384"})
+    config = dataclasses.replace(keycloak_config, algorithms=("ES256", "ES384"))
+    verifier = TokenVerifier(config, _KeyByKid({"p384": jwk}))  # type: ignore[arg-type]
+    token = jwt.encode(_claims(), signer, algorithm="ES256", headers={"kid": "p384"})
+    with pytest.raises(TokenDecodeError, match="P-384|secp384r1"):
+        await verifier.verify(token)
+
+
+@pytest.mark.parametrize("claim", ["exp", "iat"])
+async def test_verify_requires_exp_and_iat(token_verifier, rsa_keypair, claim):
+    """A token without exp or iat is a 401, not a TypeError from TokenPayload."""
+    private_key, _ = rsa_keypair
+    claims = {k: v for k, v in _claims().items() if k != claim}
+    token = jwt.encode(
+        claims, private_key, algorithm="RS256", headers={"kid": "test-kid"}
+    )
+    with pytest.raises(TokenDecodeError, match=claim):
+        await token_verifier.verify(token)
+
+
 async def test_verify_rejects_recently_expired_token_without_leeway(
     token_verifier, make_token
 ):
@@ -459,8 +483,9 @@ async def test_verify_id_token_returns_claims(token_verifier, rsa_keypair):
         ({"aud": "other-app", "azp": "other-app"}, InvalidAudienceError),
         ({"aud": ["test-app", "other-app"], "azp": "other-app"}, InvalidAudienceError),
         ({"exp": int(time.time()) - 60}, TokenExpiredError),
+        ({"exp": None}, TokenDecodeError),
     ],
-    ids=["nonce", "no-nonce", "typ", "iss", "aud", "azp", "exp"],
+    ids=["nonce", "no-nonce", "typ", "iss", "aud", "azp", "exp", "no-exp"],
 )
 async def test_verify_id_token_rejects(token_verifier, rsa_keypair, overrides, error):
     """A replayed, foreign or stale ID token must not complete a login."""
