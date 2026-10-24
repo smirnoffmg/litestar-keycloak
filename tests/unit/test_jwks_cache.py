@@ -10,7 +10,11 @@ from jwt.algorithms import ECAlgorithm, OKPAlgorithm
 
 from litestar_keycloak.exceptions import JWKSFetchError, TokenDecodeError
 from litestar_keycloak.http_client import KeycloakHttpClient
-from litestar_keycloak.token import MIN_FORCED_REFRESH_INTERVAL, JWKSCache
+from litestar_keycloak.token import (
+    FAILED_FETCH_BACKOFF,
+    MIN_FORCED_REFRESH_INTERVAL,
+    JWKSCache,
+)
 
 
 def _int_to_base64url(i: int) -> str:
@@ -253,10 +257,13 @@ async def test_unknown_kid_refetches_even_when_cache_is_fresh():
 async def test_concurrent_requests_for_rotated_kid_fetch_once():
     """Requests racing on a newly rotated kid share a single forced refresh."""
     cache = JWKSCache("http://example.com/jwks", ttl=3600, http=KeycloakHttpClient(10))
-    fetch_mock = AsyncMock(
-        side_effect=[_jwks_response("old-kid"), _jwks_response("old-kid", "new-kid")]
-    )
-    with patch.object(cache, "_fetch_jwks", fetch_mock):
+    responses = iter([_jwks_response("old-kid"), _jwks_response("old-kid", "new-kid")])
+
+    async def slow_fetch():
+        await asyncio.sleep(0)  # a bare AsyncMock never yields, so nothing races
+        return next(responses)
+
+    with patch.object(cache, "_fetch_jwks", side_effect=slow_fetch) as fetch_mock:
         await cache.warm()
         results = await asyncio.gather(*(cache.get_key("new-kid") for _ in range(3)))
     assert all(r.key_id == "new-kid" for r in results)
@@ -360,3 +367,77 @@ async def test_unknown_kid_is_an_invalid_token_not_a_backend_failure():
     ):
         await cache.get_key("attacker-chosen")
     assert isinstance(info.value, JWKSFetchError)
+
+
+# --- Keycloak unreachable: one attempt per outage window, stale keys served ---
+
+
+async def test_concurrent_waiters_share_one_failed_fetch():
+    """Waiters on the lock do not each repeat a fetch that just failed."""
+    cache = JWKSCache("http://example.com/jwks", ttl=3600, http=KeycloakHttpClient(10))
+
+    async def failing_fetch():
+        await asyncio.sleep(0)
+        raise JWKSFetchError("Keycloak down")
+
+    with patch.object(cache, "_fetch_jwks", side_effect=failing_fetch) as mock_fetch:
+        results = await asyncio.gather(
+            *(cache.get_key("kid-1") for _ in range(5)), return_exceptions=True
+        )
+    assert all(type(r) is JWKSFetchError for r in results)
+    assert mock_fetch.call_count == 1
+
+
+async def test_failed_fetch_is_not_retried_until_the_backoff_passes():
+    """Sequential requests during an outage fail fast instead of each timing out."""
+    cache = JWKSCache("http://example.com/jwks", ttl=3600, http=KeycloakHttpClient(10))
+    now = 1000.0
+    fetch_mock = AsyncMock(
+        side_effect=[JWKSFetchError("down"), _jwks_response("test-kid")]
+    )
+    with (
+        patch.object(cache, "_fetch_jwks", fetch_mock),
+        patch("litestar_keycloak.token.time.monotonic", side_effect=lambda: now),
+    ):
+        with pytest.raises(JWKSFetchError):
+            await cache.get_key("test-kid")
+        with pytest.raises(JWKSFetchError):
+            await cache.get_key("test-kid")
+        assert fetch_mock.call_count == 1
+
+        now += FAILED_FETCH_BACKOFF + 1
+        assert (await cache.get_key("test-kid")).key_id == "test-kid"
+    assert fetch_mock.call_count == 2
+
+
+async def test_expired_keys_are_served_while_keycloak_is_unreachable():
+    """stale-if-error: a TTL expiry during an outage does not lock users out."""
+    cache = JWKSCache("http://example.com/jwks", ttl=0, http=KeycloakHttpClient(10))
+    fetch_mock = AsyncMock(
+        side_effect=[_jwks_response("test-kid"), JWKSFetchError("down")]
+    )
+    with patch.object(cache, "_fetch_jwks", fetch_mock):
+        await cache.warm()
+        key = await cache.get_key("test-kid")
+        with pytest.raises(JWKSFetchError):
+            await cache.get_key("never-seen-kid")
+    assert key.key_id == "test-kid"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [["not", "an", "object"], {"keys": "nope"}, ValueError("not JSON")],
+    ids=["array", "keys-not-list", "not-json"],
+)
+async def test_malformed_jwks_is_a_fetch_error(body):
+    """A broken JWKS response is Keycloak's fault (502), not a crash."""
+    http = KeycloakHttpClient(10)
+    cache = JWKSCache("http://example.com/jwks", ttl=3600, http=http)
+    kwargs = (
+        {"side_effect": body} if isinstance(body, Exception) else {"return_value": body}
+    )
+    with (
+        patch.object(http, "get_json", new_callable=AsyncMock, **kwargs),
+        pytest.raises(JWKSFetchError),
+    ):
+        await cache.get_key("kid-1")

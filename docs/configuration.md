@@ -72,7 +72,7 @@ Verified against Keycloak 26: an admin-ended session and a disabled user both in
 
 | Field            | Default | Description                                                           |
 | ---------------- | ------- | --------------------------------------------------------------------- |
-| `jwks_cache_ttl` | `3600`  | Seconds to cache the JWKS before re-fetching. A token with an unknown `kid` (key rotation) forces a re-fetch regardless, at most once per 10 seconds. |
+| `jwks_cache_ttl` | `3600`  | Seconds to cache the JWKS before re-fetching. A token with an unknown `kid` (key rotation) forces a re-fetch regardless, at most once per 10 seconds; a `kid` still unknown after it gets `401`. If Keycloak cannot be reached, keys already cached keep verifying tokens past the TTL, and after a failed fetch no new one is tried for 5 seconds. |
 | `http_timeout`   | `10`    | Timeout in seconds for HTTP calls to Keycloak (JWKS, token endpoint). |
 
 The plugin warms the JWKS cache on startup, but the warm-up is **best-effort**: if Keycloak is unreachable at boot the app still starts (a warning is logged) and keys are fetched on the first request. That request returns `502` until Keycloak becomes reachable, so a readiness probe on a protected route still reflects Keycloak availability.

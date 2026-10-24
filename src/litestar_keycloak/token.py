@@ -43,6 +43,11 @@ logger = logging.getLogger(__name__)
 #: while still picking up a rotated key within seconds.
 MIN_FORCED_REFRESH_INTERVAL = 10
 
+#: Seconds after a failed JWKS fetch during which no new fetch is attempted.
+#: While Keycloak is unreachable each attempt can take the full HTTP timeout;
+#: without the pause every request would queue on the lock for its own.
+FAILED_FETCH_BACKOFF = 5
+
 _RSA_SIG_ALGS = frozenset({"RS256", "RS384", "RS512"})
 
 #: ``events`` member that marks a back-channel logout token.
@@ -82,7 +87,9 @@ class JWKSCache:
         self._keys: dict[str, PyJWK] = {}
         self._fetched_at: float = 0.0
         self._forced_at: float = float("-inf")
-        self._fetch_count = 0
+        self._attempts = 0
+        self._failure: JWKSFetchError | None = None
+        self._failed_at: float = float("-inf")
         self._lock = asyncio.Lock()
 
     # -- public API --------------------------------------------------------
@@ -95,13 +102,24 @@ class JWKSCache:
         2. Refresh cache (TTL expired or unknown ``kid``).  A refresh forced by
            an unknown ``kid`` is skipped if another forced refresh ran less
            than ``MIN_FORCED_REFRESH_INTERVAL`` seconds ago.
-        3. If ``kid`` still missing after refresh, raise ``JWKSFetchError``.
+        3. If ``kid`` still missing after refresh, raise
+           ``UnknownSigningKeyError``.
+
+        If Keycloak cannot be reached, a key already cached under *kid* is
+        served past its TTL (stale-if-error); otherwise ``JWKSFetchError``.
         """
         key = self._lookup(kid)
         if key is not None:
             return key
 
-        await self._refresh(force=True)
+        try:
+            await self._refresh(force=True)
+        except JWKSFetchError:
+            stale = self._keys.get(kid)
+            if stale is None:
+                raise
+            logger.warning("JWKS refresh failed; serving cached key kid=%s", kid)
+            return stale
 
         # Not ``_lookup``: with ``ttl == 0`` the keys just fetched already count
         # as expired, and the miss would turn every request into an error.
@@ -129,17 +147,28 @@ class JWKSCache:
         return (time.monotonic() - self._fetched_at) > self._ttl
 
     @property
+    def _failed_recently(self) -> bool:
+        return (time.monotonic() - self._failed_at) < FAILED_FETCH_BACKOFF
+
+    def _raise_failure(self) -> None:
+        if self._failure is not None:
+            # A fresh instance: re-raising the shared one from several
+            # coroutines would keep growing its traceback.
+            raise JWKSFetchError(str(self._failure)) from self._failure
+
+    @property
     def _forced_recently(self) -> bool:
         return (time.monotonic() - self._forced_at) < MIN_FORCED_REFRESH_INTERVAL
 
     async def _refresh(self, *, force: bool = False) -> None:
-        seen = self._fetch_count
+        seen = self._attempts
         async with self._lock:
-            # Another coroutine fetched while we waited on the lock.  The
-            # freshness check below cannot tell: a fetch made on a cold or
-            # expired cache sets no throttle mark, so a forced waiter would
-            # fetch again.
-            if self._fetch_count != seen:
+            # Another coroutine fetched while we waited on the lock — share
+            # its outcome.  The freshness check below cannot tell: a fetch made
+            # on a cold or expired cache sets no throttle mark, so a forced
+            # waiter would fetch again.
+            if self._attempts != seen or self._failed_recently:
+                self._raise_failure()
                 return
             fresh = self._keys and not self._is_expired
             if fresh and (not force or self._forced_recently):
@@ -147,7 +176,17 @@ class JWKSCache:
             if fresh:
                 self._forced_at = time.monotonic()
 
-            jwks_data = await self._fetch_jwks()
+            try:
+                jwks_data = await self._fetch_jwks()
+            except JWKSFetchError as exc:
+                self._failure = exc
+                self._failed_at = time.monotonic()
+                raise
+            finally:
+                # After the await: a coroutine arriving mid-fetch must see the
+                # count change, or it would fetch again behind the lock.
+                self._attempts += 1
+            self._failure = None
             keys: dict[str, PyJWK] = {}
             for key_data in jwks_data.get("keys", []):
                 kid = key_data.get("kid")
@@ -163,18 +202,20 @@ class JWKSCache:
 
             self._keys = keys
             self._fetched_at = time.monotonic()
-            self._fetch_count += 1
             logger.debug("JWKS refreshed, %d keys cached", len(keys))
 
     async def _fetch_jwks(self) -> dict[str, Any]:
         try:
-            return await self._http.get_json(
+            jwks = await self._http.get_json(
                 self._jwks_url, headers={"Accept": "application/json"}
             )
-        except (aiohttp.ClientError, OSError) as exc:
+        except (aiohttp.ClientError, OSError, ValueError) as exc:
             raise JWKSFetchError(
                 f"Failed to fetch JWKS from {self._jwks_url}: {exc}"
             ) from exc
+        if not isinstance(jwks, dict) or not isinstance(jwks.get("keys", []), list):
+            raise JWKSFetchError(f"JWKS from {self._jwks_url} is not a key set")
+        return jwks
 
 
 def _parse_signing_jwk(key_data: dict[str, Any]) -> PyJWK | None:
