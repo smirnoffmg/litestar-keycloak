@@ -110,9 +110,12 @@ async def test_concurrent_refreshes_only_fetch_once():
     """Concurrent get_key when cache empty results in single _fetch_jwks call."""
     cache = JWKSCache("http://example.com/jwks", ttl=3600, http=KeycloakHttpClient(10))
     jwks_data = _jwks_response("kid-1")
-    with patch.object(
-        cache, "_fetch_jwks", new_callable=AsyncMock, return_value=jwks_data
-    ) as mock_fetch:
+
+    async def slow_fetch():
+        await asyncio.sleep(0)  # a bare AsyncMock never yields, so nothing races
+        return jwks_data
+
+    with patch.object(cache, "_fetch_jwks", side_effect=slow_fetch) as mock_fetch:
         results = await asyncio.gather(
             cache.get_key("kid-1"),
             cache.get_key("kid-1"),

@@ -72,6 +72,7 @@ class JWKSCache:
         self._keys: dict[str, PyJWK] = {}
         self._fetched_at: float = 0.0
         self._forced_at: float = float("-inf")
+        self._fetch_count = 0
         self._lock = asyncio.Lock()
 
     # -- public API --------------------------------------------------------
@@ -122,11 +123,14 @@ class JWKSCache:
         return (time.monotonic() - self._forced_at) < MIN_FORCED_REFRESH_INTERVAL
 
     async def _refresh(self, *, force: bool = False) -> None:
+        seen = self._fetch_count
         async with self._lock:
-            # Double-check after acquiring: another coroutine may have already
-            # refreshed while we waited on the lock.  For a forced refresh the
-            # throttle doubles as that check — coroutines racing on one rotated
-            # kid all see the forced fetch the first of them just made.
+            # Another coroutine fetched while we waited on the lock.  The
+            # freshness check below cannot tell: a fetch made on a cold or
+            # expired cache sets no throttle mark, so a forced waiter would
+            # fetch again.
+            if self._fetch_count != seen:
+                return
             fresh = self._keys and not self._is_expired
             if fresh and (not force or self._forced_recently):
                 return
@@ -149,6 +153,7 @@ class JWKSCache:
 
             self._keys = keys
             self._fetched_at = time.monotonic()
+            self._fetch_count += 1
             logger.debug("JWKS refreshed, %d keys cached", len(keys))
 
     async def _fetch_jwks(self) -> dict[str, Any]:
