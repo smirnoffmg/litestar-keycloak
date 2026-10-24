@@ -153,6 +153,17 @@ class KeycloakConfig:
     """Route-handler ``opt`` key for per-handler opt-out, e.g.
     ``@get("/open", exclude_from_auth=True)``."""
 
+    optional_auth_opt_key: str = "optional_auth"
+    """Route-handler ``opt`` key for optional authentication, e.g.
+    ``@get("/feed", optional_auth=True)``: a request without a token proceeds
+    anonymously (``current_user`` is ``None``), while a token that is present
+    must still be valid.  Annotate such handlers with ``OptionalCurrentUser``."""
+
+    groups_claim: str = "groups"
+    """Token claim holding the user's groups, as configured on Keycloak's Group
+    Membership mapper.  Note that the built-in ``microprofile-jwt`` scope puts
+    realm *roles* into a claim of the same name."""
+
     # -- derived properties ------------------------------------------------
 
     @property

@@ -8,6 +8,8 @@ import pytest
 from litestar_keycloak.exceptions import (
     AuthenticationError,
     AuthorizationError,
+    InsufficientAuthenticationError,
+    InsufficientGroupError,
     InsufficientRoleError,
     InsufficientScopeError,
     InvalidAudienceError,
@@ -262,3 +264,57 @@ def test_authorization_error_is_logged_as_warning(caplog):
     message = record.getMessage()
     for part in ("DELETE", "/admin/users/7", "user-42", "Missing roles: admin"):
         assert part in message
+
+
+# --- step-up (RFC 9470) and groups ---
+
+
+@pytest.mark.parametrize(
+    ("exc", "challenge", "body"),
+    [
+        (
+            InsufficientAuthenticationError(acr_values=("2", "3")),
+            'Bearer error="insufficient_user_authentication", '
+            'error_description="A different authentication level is required", '
+            'acr_values="2 3"',
+            "A different authentication level is required",
+        ),
+        (
+            InsufficientAuthenticationError(max_age=300),
+            'Bearer error="insufficient_user_authentication", '
+            'error_description="More recent authentication is required", '
+            'max_age="300"',
+            "More recent authentication is required",
+        ),
+    ],
+)
+def test_step_up_challenge(exc, challenge, body):
+    """RFC 9470: a 401 tells the client which acr or login age to obtain."""
+    response = exception_handlers[AuthenticationError](_mock_request(), exc)
+    assert response.status_code == 401
+    assert response.content == {"error": body}
+    assert response.headers["WWW-Authenticate"] == challenge
+
+
+def test_insufficient_group_error_is_403_listing_missing_groups():
+    exc = InsufficientGroupError(
+        required=frozenset({"staff", "ops"}), actual=frozenset({"ops"})
+    )
+    response = exception_handlers[AuthorizationError](_mock_request(), exc)
+    assert response.status_code == 403
+    assert response.content == {"error": "Missing groups: staff"}
+
+
+def test_step_up_denial_is_logged_as_warning(caplog):
+    """A step-up demand rejects an authenticated caller, so it is audited too."""
+    request = MagicMock()
+    request.method = "POST"
+    request.url.path = "/payments"
+    request.scope = {"user": MagicMock(sub="user-42")}
+    exc = InsufficientAuthenticationError(acr_values=("2",))
+    with caplog.at_level(logging.INFO, logger="litestar_keycloak.exceptions"):
+        exception_handlers[AuthenticationError](request, exc)
+    [record] = caplog.records
+    assert record.levelno == logging.WARNING
+    assert "/payments" in record.getMessage()
+    assert "user-42" in record.getMessage()

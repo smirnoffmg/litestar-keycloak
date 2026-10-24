@@ -65,11 +65,17 @@ def create_auth_middleware(
 
             Excluded paths (``exclude_auth_patterns``) and per-handler opt-outs
             are handled by the framework before this method is reached, so any
-            request that gets here is expected to carry a token.
+            request that gets here is expected to carry a token — unless its
+            handler opts into optional auth, which yields ``user=None``.
             """
-            raw_token = _extract_token(connection, config)
+            try:
+                raw_token = _extract_token(connection, config)
+            except MissingTokenError:
+                if _allows_anonymous(connection, config):
+                    return AuthenticationResult(user=None, auth=None)
+                raise
             payload = await verifier.verify(raw_token)
-            user = KeycloakUser.from_token(payload)
+            user = KeycloakUser.from_token(payload, groups_claim=config.groups_claim)
 
             connection.state[TOKEN_STATE_KEY] = payload
             connection.state[RAW_TOKEN_STATE_KEY] = raw_token
@@ -77,6 +83,17 @@ def create_auth_middleware(
             return AuthenticationResult(user=user, auth=payload)
 
     return KeycloakAuthMiddleware
+
+
+def _allows_anonymous(
+    connection: ASGIConnection[Any, Any, Any, Any],
+    config: KeycloakConfig,
+) -> bool:
+    route_handler = connection.scope.get("route_handler")
+    return bool(
+        route_handler is not None
+        and route_handler.opt.get(config.optional_auth_opt_key)
+    )
 
 
 def _extract_token(

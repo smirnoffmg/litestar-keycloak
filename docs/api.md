@@ -12,9 +12,16 @@ from litestar_keycloak import (
     CurrentUser,
     CurrentTokenPayload,
     CurrentRawToken,
+    OptionalCurrentUser,
+    OptionalTokenPayload,
+    OptionalRawToken,
     require_roles,
     require_client_roles,
+    require_groups,
     require_scopes,
+    require_acr,
+    require_recent_auth,
+    require_user,
     MatchStrategy,
 )
 ```
@@ -63,6 +70,9 @@ Annotate handler parameters with these; the parameter names must stay
 | `CurrentUser`         | `KeycloakUser` |
 | `CurrentTokenPayload` | `TokenPayload` |
 | `CurrentRawToken`     | `str`          |
+| `OptionalCurrentUser`  | `KeycloakUser \| None` — for [optional-auth](configuration.md#optional-authentication) routes |
+| `OptionalTokenPayload` | `TokenPayload \| None` |
+| `OptionalRawToken`     | `str \| None` |
 
 ## Guards
 
@@ -82,7 +92,27 @@ Annotate handler parameters with these; the parameter names must stay
       show_source: true
       show_root_heading: true
 
+::: litestar_keycloak.guards.require_groups
+    options:
+      show_source: true
+      show_root_heading: true
+
 ::: litestar_keycloak.guards.require_scopes
+    options:
+      show_source: true
+      show_root_heading: true
+
+::: litestar_keycloak.guards.require_acr
+    options:
+      show_source: true
+      show_root_heading: true
+
+::: litestar_keycloak.guards.require_recent_auth
+    options:
+      show_source: true
+      show_root_heading: true
+
+::: litestar_keycloak.guards.require_user
     options:
       show_source: true
       show_root_heading: true

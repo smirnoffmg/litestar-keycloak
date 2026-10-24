@@ -81,6 +81,25 @@ class InvalidTokenTypeError(AuthenticationError):
         super().__init__(f"Expected token type {expected!r}, got {got!r}")
 
 
+class InsufficientAuthenticationError(AuthenticationError):
+    """The login is too weak or too old for this route (RFC 9470 step-up).
+
+    A 401 rather than a 403: the user can satisfy the route by signing in
+    again with a stronger method, so the client is told what to obtain.
+    """
+
+    def __init__(
+        self, acr_values: tuple[str, ...] = (), max_age: int | None = None
+    ) -> None:
+        self.acr_values = acr_values
+        self.max_age = max_age
+        if acr_values:
+            message = "A different authentication level is required"
+        else:
+            message = "More recent authentication is required"
+        super().__init__(message)
+
+
 # ---------------------------------------------------------------------------
 # Authorization errors -> HTTP 403
 # ---------------------------------------------------------------------------
@@ -98,6 +117,16 @@ class InsufficientRoleError(AuthorizationError):
         self.actual = actual
         missing = required - actual
         super().__init__(f"Missing roles: {', '.join(sorted(missing))}")
+
+
+class InsufficientGroupError(AuthorizationError):
+    """User does not belong to one or more required groups."""
+
+    def __init__(self, required: frozenset[str], actual: frozenset[str]) -> None:
+        self.required = required
+        self.actual = actual
+        missing = required - actual
+        super().__init__(f"Missing groups: {', '.join(sorted(missing))}")
 
 
 class InsufficientScopeError(AuthorizationError):
@@ -147,23 +176,19 @@ def _error_response(
     )
 
 
-def _handle_authentication_error(
-    _: Request[Any, Any, Any], exc: AuthenticationError
-) -> Response[dict[str, str]]:
-    # The body stays generic so an unauthenticated caller does not learn the
-    # expected issuer, accepted audiences or library error text; the detail
-    # goes to the log instead.
-    if isinstance(exc, MissingTokenError):
-        return _error_response(401, str(exc), _CHALLENGE_NO_TOKEN)
-    logger.info("Authentication failed: %s: %s", type(exc).__name__, exc)
-    if isinstance(exc, TokenExpiredError):
-        return _error_response(401, "Token expired", _CHALLENGE_EXPIRED)
-    return _error_response(401, "Invalid token", _CHALLENGE_INVALID)
+def _step_up_challenge(exc: InsufficientAuthenticationError) -> str:
+    params = [
+        'error="insufficient_user_authentication"',
+        f'error_description="{exc}"',
+    ]
+    if exc.acr_values:
+        params.append(f'acr_values="{" ".join(exc.acr_values)}"')
+    if exc.max_age is not None:
+        params.append(f'max_age="{exc.max_age}"')
+    return "Bearer " + ", ".join(params)
 
 
-def _handle_authorization_error(
-    request: Request[Any, Any, Any], exc: AuthorizationError
-) -> Response[dict[str, str]]:
+def _log_denial(request: Request[Any, Any, Any], exc: KeycloakError) -> None:
     # A denial of an authenticated caller is a security event worth auditing.
     # Read the scope, not ``request.user``, which raises when no auth ran.
     user = request.scope.get("user")
@@ -174,6 +199,29 @@ def _handle_authorization_error(
         getattr(user, "sub", None),
         exc,
     )
+
+
+def _handle_authentication_error(
+    request: Request[Any, Any, Any], exc: AuthenticationError
+) -> Response[dict[str, str]]:
+    # The body stays generic so an unauthenticated caller does not learn the
+    # expected issuer, accepted audiences or library error text; the detail
+    # goes to the log instead.
+    if isinstance(exc, MissingTokenError):
+        return _error_response(401, str(exc), _CHALLENGE_NO_TOKEN)
+    if isinstance(exc, InsufficientAuthenticationError):
+        _log_denial(request, exc)
+        return _error_response(401, str(exc), _step_up_challenge(exc))
+    logger.info("Authentication failed: %s: %s", type(exc).__name__, exc)
+    if isinstance(exc, TokenExpiredError):
+        return _error_response(401, "Token expired", _CHALLENGE_EXPIRED)
+    return _error_response(401, "Invalid token", _CHALLENGE_INVALID)
+
+
+def _handle_authorization_error(
+    request: Request[Any, Any, Any], exc: AuthorizationError
+) -> Response[dict[str, str]]:
+    _log_denial(request, exc)
     return _error_response(403, str(exc), _CHALLENGE_FORBIDDEN)
 
 

@@ -11,7 +11,7 @@ Two layers, one principle: **unit tests prove the logic, integration tests prove
 | Unit        | `pytest` (default)      | unmarked                   | None — fake JWTs, in-memory JWKS    | ~2s     |
 | Integration | `pytest -m integration` | `@pytest.mark.integration` | Keycloak container (testcontainers) | ~60s+   |
 
-Current state: **234 tests across 19 files** — 212 unit, 22 integration — at **99% coverage**.
+Current state: **264 tests across 21 files** — 239 unit, 25 integration — at **99% coverage**.
 
 Integration tests are **excluded by default** (`addopts = "-m 'not integration'"`), so a bare
 `pytest` is always the fast path. `asyncio_mode = "auto"` means `async def test_*` needs no
@@ -25,13 +25,14 @@ tests/
 ├── test_plugin.py              # plugin registration (drives on_app_init directly)
 ├── test_routes.py              # OIDC routes with mocked Keycloak calls
 ├── test_testing_api.py         # the public helpers in conftest.py (nothing else uses them)
+├── test_optional_auth.py       # optional_auth routes, end to end with MockKeycloakPlugin
 ├── fixtures/realm-export.json  # realm imported by the container
 ├── unit/
 │   ├── conftest.py             # RSA keypair, JWKS double, make_token factory
 │   └── test_{auth,config,dependencies,exceptions,guards,http_client,jwks_cache,models,token}.py
 └── integration/
-    ├── conftest.py             # Keycloak container, config, token fixtures
-    └── test_{guards_integration,jwks_refresh,key_types,oidc_flow,routes_integration,scenarios,token_validation}.py
+    ├── conftest.py             # Keycloak container, config, token, admin_api, browser_login fixtures
+    └── test_{guards_integration,identity,jwks_refresh,key_types,oidc_flow,routes_integration,scenarios,token_validation}.py
 ```
 
 `tests/unit/` and `tests/integration/` have no `__init__.py`, so **cross-file imports between
@@ -48,15 +49,15 @@ Measured with `uv run pytest --cov=litestar_keycloak --cov-report=term-missing` 
 | `__init__.py`     | —     | 100%     | |
 | `auth.py`         | 15    | 100%     | |
 | `config.py`       | 25    | 100%     | |
-| `dependencies.py` | 4     | 82%      | `39-42` — litestar < 2.23 import shim |
-| `exceptions.py`   | 21    | 100%     | |
-| `guards.py`       | 17    | 100%     | |
+| `dependencies.py` | 4     | 75%      | `47-53` — litestar < 2.23 import shim |
+| `exceptions.py`   | 27    | 100%     | |
+| `guards.py`       | 27    | 100%     | |
 | `http_client.py`  | 7     | 97%      | `31->33` — lock double-check branch |
-| `models.py`       | 25    | 100%     | |
+| `models.py`       | 32    | 100%     | |
 | `plugin.py`       | 13    | 100%     | |
 | `routes.py`       | 28    | 100%     | |
 | `token.py`        | 41    | 100%     | |
-| **Total**         | 212   | **99%**  | |
+| **Total**         | 239   | **99%**  | |
 
 There is no `fail_under` threshold; `--cov` is not in `addopts`, so coverage runs only when
 asked for.
@@ -148,9 +149,9 @@ this in.
 
 ## Known gaps
 
-- `dependencies.py:39-42` — the `except ImportError` shim for litestar < 2.23. Unreachable on
+- `dependencies.py:47-53` — the `except ImportError` shim for litestar < 2.23. Unreachable on
   the installed version without faking the import failure; this is the whole reason that
-  module sits at 82%.
+  module sits at 75%.
 - `http_client.py:31->33` — the inner half of the double-checked lock in `_get_session`, i.e.
   the branch where another coroutine created the session first. Not deterministically
   triggerable without instrumenting the lock.

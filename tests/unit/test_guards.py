@@ -1,15 +1,26 @@
 """Unit tests for require_roles, require_client_roles, require_scopes guards."""
 
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
-from litestar_keycloak.exceptions import InsufficientRoleError, InsufficientScopeError
+from litestar_keycloak.exceptions import (
+    AuthorizationError,
+    InsufficientAuthenticationError,
+    InsufficientGroupError,
+    InsufficientRoleError,
+    InsufficientScopeError,
+)
 from litestar_keycloak.guards import (
     MatchStrategy,
+    require_acr,
     require_client_roles,
+    require_groups,
+    require_recent_auth,
     require_roles,
     require_scopes,
+    require_user,
 )
 from litestar_keycloak.models import KeycloakUser
 
@@ -182,3 +193,81 @@ def test_require_scopes_any_strategy():
     user = KeycloakUser(sub="u1", scopes=frozenset({"profile"}))
     guard = require_scopes("openid", "profile", strategy=MatchStrategy.ANY)
     guard(_connection(user), _handler())  # no raise
+
+
+# --- require_groups ---
+
+
+def test_require_groups_all_strategy():
+    user = KeycloakUser(sub="u1", groups=frozenset({"staff", "ops"}))
+    require_groups("staff", "ops")(_connection(user), _handler())
+    with pytest.raises(InsufficientGroupError, match="Missing groups: audit"):
+        require_groups("staff", "audit")(_connection(user), _handler())
+
+
+def test_require_groups_any_strategy():
+    user = KeycloakUser(sub="u1", groups=frozenset({"ops"}))
+    require_groups("staff", "ops", strategy=MatchStrategy.ANY)(
+        _connection(user), _handler()
+    )
+    with pytest.raises(InsufficientGroupError):
+        require_groups("staff", "audit", strategy=MatchStrategy.ANY)(
+            _connection(user), _handler()
+        )
+
+
+# --- require_acr ---
+
+
+def test_require_acr_accepts_listed_level():
+    user = KeycloakUser(sub="u1", acr="2")
+    require_acr("2", "3")(_connection(user), _handler())
+
+
+@pytest.mark.parametrize("acr", ["1", None])
+def test_require_acr_rejects_other_or_missing_level(acr):
+    """A lower or absent acr asks for step-up, listing the acceptable values."""
+    user = KeycloakUser(sub="u1", acr=acr)
+    with pytest.raises(InsufficientAuthenticationError) as exc_info:
+        require_acr("2", "3")(_connection(user), _handler())
+    assert exc_info.value.acr_values == ("2", "3")
+    assert exc_info.value.max_age is None
+
+
+# --- require_recent_auth ---
+
+
+def test_require_recent_auth_accepts_recent_login():
+    user = KeycloakUser(sub="u1", auth_time=1000)
+    with patch("litestar_keycloak.guards.time.time", return_value=1300):
+        require_recent_auth(300)(_connection(user), _handler())
+
+
+@pytest.mark.parametrize("auth_time", [999, None])
+def test_require_recent_auth_rejects_old_or_unknown_login(auth_time):
+    """Without auth_time the login age is unknown, so the guard fails closed."""
+    user = KeycloakUser(sub="u1", auth_time=auth_time)
+    with (
+        patch("litestar_keycloak.guards.time.time", return_value=1300),
+        pytest.raises(InsufficientAuthenticationError) as exc_info,
+    ):
+        require_recent_auth(300)(_connection(user), _handler())
+    assert exc_info.value.max_age == 300
+    assert exc_info.value.acr_values == ()
+
+
+def test_require_recent_auth_rejects_negative_max_age():
+    with pytest.raises(ValueError, match="max_age"):
+        require_recent_auth(-1)
+
+
+# --- require_user ---
+
+
+def test_require_user_runs_the_predicate():
+    staff = KeycloakUser(sub="u1", groups=frozenset({"staff"}))
+    robot = KeycloakUser(sub="u2", is_service_account=True)
+    guard = require_user(lambda u: not u.is_service_account, detail="Humans only")
+    guard(_connection(staff), _handler())
+    with pytest.raises(AuthorizationError, match="Humans only"):
+        guard(_connection(robot), _handler())

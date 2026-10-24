@@ -137,3 +137,58 @@ def shortlived_token(keycloak_container) -> str:
 def user_token_response(keycloak_container) -> dict[str, Any]:
     """Full token response (access_token, refresh_token, etc.) for testuser."""
     return obtain_token(keycloak_container.get_url(), "testuser", "testpass")
+
+
+@pytest.fixture
+def admin_api(keycloak_container):
+    """httpx client for the test-realm Admin REST API, as the bootstrap admin."""
+    import httpx
+
+    base_url = keycloak_container.get_url()
+    resp = httpx.post(
+        f"{base_url}/realms/master/protocol/openid-connect/token",
+        data={
+            "grant_type": "password",
+            "client_id": "admin-cli",
+            "username": keycloak_container.username,
+            "password": keycloak_container.password,
+        },
+        timeout=30,
+    )
+    resp.raise_for_status()
+    with httpx.Client(
+        base_url=f"{base_url}/admin/realms/test-realm",
+        headers={"Authorization": f"Bearer {resp.json()['access_token']}"},
+        timeout=30,
+    ) as client:
+        yield client
+
+
+@pytest.fixture
+def browser_login():
+    """Drive Keycloak's HTML login form; return the callback redirect (with code)."""
+    import re
+
+    import httpx
+
+    def _login(authorize_url: str, username: str, password: str) -> str:
+        with httpx.Client(follow_redirects=False, timeout=30) as client:
+            page = client.get(authorize_url)
+            page.raise_for_status()
+            match = re.search(
+                r'action="(?P<url>[^"]*login-actions/authenticate[^"]*)"', page.text
+            )
+            assert match, "Keycloak login form not found on the authorization page"
+            action = match.group("url").replace("&amp;", "&")
+            # Keycloak sets its session cookies as SameSite=None; Secure, which
+            # httpx will not resend over plain http — forward them explicitly.
+            cookie_header = "; ".join(f"{k}={v}" for k, v in client.cookies.items())
+            resp = client.post(
+                action,
+                data={"username": username, "password": password},
+                headers={"Cookie": cookie_header},
+            )
+            assert resp.status_code in (302, 303), f"login POST -> {resp.status_code}"
+            return resp.headers["location"]
+
+    return _login

@@ -48,6 +48,7 @@ For the redirect-mode flow (session middleware, endpoint behavior) see the [OIDC
 | `strict_audience`     | `False`       | If `True`, accept a token only when its `aud` (string or list) contains the primary audience or one of `optional_audiences`. `azp` is ignored, and a token without `aud` gets `401`. Add a Keycloak Audience mapper before enabling it — see [Service-to-service](guides/service-to-service.md#requiring-the-audience-in-aud-strict_audience). |
 | `expected_issuer`     | `None`        | Expected `iss` claim; defaults to `{server_url}/realms/{realm}`. Set when Keycloak's frontend/hostname URL differs from `server_url` (e.g. behind a reverse proxy), so `iss` validation matches the value Keycloak signs. |
 | `algorithms`          | `("RS256",)`  | Accepted JWT signing algorithms. RSA (`RS*`, `PS*`), EC (`ES*`) and Ed25519 (`EdDSA`) keys are supported; add e.g. `"ES256"` when the realm signs with an `ecdsa-generated` key provider. A token whose `alg` does not match the key type of its `kid` gets `401`. |
+| `groups_claim`        | `"groups"`    | Claim holding the user's groups, as named on Keycloak's Group Membership mapper. See [Guards](guides/guards.md#groups-require_groups). |
 | `leeway`              | `0`           | Seconds of clock skew tolerated when checking `exp`, `nbf` and `iat`. Set a few seconds if the app and Keycloak clocks may drift. |
 | `expected_token_type` | `"Bearer"`    | Required payload `typ` claim. The default rejects Keycloak ID and Refresh tokens presented as access tokens. Set to `None` to disable the check (e.g. providers that omit `typ`). |
 
@@ -69,6 +70,7 @@ There are three ways to let a request skip authentication:
 | `excluded_paths`   | `frozenset()`        | Exact request paths that skip auth, e.g. `{"/", "/health"}`. Matched literally (`/health` ≠ `/health/`). |
 | `exclude_patterns` | `()`                 | Regex patterns for prefixes/subtrees, e.g. `("^/public/", "^/docs")`. Anchor with `^` to match from the start. |
 | `exclude_opt_key`  | `"exclude_from_auth"`| Route-handler `opt` key for per-handler opt-out.                                                     |
+| `optional_auth_opt_key` | `"optional_auth"` | Route-handler `opt` key for [optional authentication](#optional-authentication).                  |
 
 Per-handler opt-out marks a single route public regardless of the config lists:
 
@@ -79,6 +81,21 @@ from litestar import get
 async def webhook() -> dict:
     return {"ok": True}
 ```
+
+## Optional authentication
+
+A route can serve both anonymous and signed-in callers. Mark it with the `optional_auth_opt_key` (default `"optional_auth"`) and annotate the parameter with `OptionalCurrentUser`:
+
+```python
+from litestar import get
+from litestar_keycloak import OptionalCurrentUser
+
+@get("/feed", optional_auth=True)
+async def feed(current_user: OptionalCurrentUser) -> dict:
+    return {"personalized": current_user is not None}
+```
+
+Without a token the request proceeds with `current_user`, `token_payload` and `raw_token` set to `None` (use `OptionalTokenPayload` / `OptionalRawToken`). A token that *is* sent must still be valid — a bad one gets `401`, not a silent downgrade to anonymous. Keep the `Optional…` annotations on such routes: a plain `CurrentUser` there makes an anonymous request fail with `500` (`msgspec.ValidationError … at $.current_user`).
 
 `OPTIONS` requests bypass authentication by default (CORS preflight). When `include_routes=True`, the auth routes under `auth_prefix` are automatically excluded so unauthenticated users can reach login and callback.
 

@@ -88,6 +88,26 @@ class TokenPayload:
         """Scope string split into a set for O(1) membership tests."""
         return frozenset(self.scope.split()) if self.scope else frozenset()
 
+    # Read from ``extra`` rather than declared as fields: these claims landed
+    # there before they were modelled, and moving them would break readers.
+    @property
+    def acr(self) -> str | None:
+        """Authentication context class (e.g. ``"1"`` password, ``"2"`` with OTP)."""
+        value = self.extra.get("acr")
+        return str(value) if value is not None else None
+
+    @property
+    def auth_time(self) -> int | None:
+        """When the user last actively authenticated (Unix epoch seconds)."""
+        value = self.extra.get("auth_time")
+        return int(value) if value is not None else None
+
+    @property
+    def sid(self) -> str | None:
+        """Keycloak session ID shared by all tokens of one login session."""
+        value = self.extra.get("sid")
+        return str(value) if value is not None else None
+
     @property
     def expires_at(self) -> datetime:
         """``exp`` as a timezone-aware UTC datetime."""
@@ -154,6 +174,27 @@ class KeycloakUser:
     raw: TokenPayload | None = None
     """Full token payload for advanced use cases."""
 
+    iss: str | None = None
+    """Issuer.  Together with ``sub`` it identifies the user unambiguously."""
+
+    azp: str | None = None
+    """Client the token was issued to."""
+
+    groups: frozenset[str] = field(default_factory=frozenset)
+    """Group names from the group-membership claim (see ``groups_claim``)."""
+
+    acr: str | None = None
+    """Authentication context class of the login."""
+
+    auth_time: int | None = None
+    """When the user last actively authenticated (Unix epoch seconds)."""
+
+    sid: str | None = None
+    """Keycloak session ID."""
+
+    is_service_account: bool = False
+    """``True`` for a client_credentials token, which acts as a client, not a user."""
+
     def has_role(self, role: str) -> bool:
         """Check if the user holds a realm role."""
         return role in self.realm_roles
@@ -166,13 +207,20 @@ class KeycloakUser:
         """Check if the token carries a specific scope."""
         return scope in self.scopes
 
+    def has_group(self, group: str) -> bool:
+        """Check if the user belongs to a group (as named in the token)."""
+        return group in self.groups
+
     @classmethod
-    def from_token(cls, payload: TokenPayload) -> KeycloakUser:
+    def from_token(
+        cls, payload: TokenPayload, *, groups_claim: str = "groups"
+    ) -> KeycloakUser:
         """Construct from a validated ``TokenPayload``."""
         client_roles = {
             client_id: frozenset(access.get("roles", []))
             for client_id, access in payload.resource_access.items()
         }
+        groups = payload.extra.get(groups_claim)
         return cls(
             sub=payload.sub,
             preferred_username=payload.preferred_username,
@@ -185,4 +233,15 @@ class KeycloakUser:
             client_roles=client_roles,
             scopes=payload.scopes,
             raw=payload,
+            iss=payload.iss,
+            azp=payload.azp,
+            groups=frozenset(groups) if isinstance(groups, list) else frozenset(),
+            acr=payload.acr,
+            auth_time=payload.auth_time,
+            sid=payload.sid,
+            # The service_account client scope adds client_id; Keycloak < 24
+            # used a clientId claim instead.
+            is_service_account=any(
+                k in payload.extra for k in ("client_id", "clientId")
+            ),
         )

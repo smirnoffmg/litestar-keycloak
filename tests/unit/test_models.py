@@ -2,6 +2,8 @@
 
 import time
 
+import pytest
+
 from litestar_keycloak.models import KeycloakUser, TokenPayload
 
 # --- TokenPayload.from_claims ---
@@ -352,3 +354,66 @@ def test_from_claims_sub_empty_when_no_fallback_available():
         {"iss": "http://kc/realms/r", "aud": "app", "exp": 2000, "iat": 1000}
     )
     assert payload.sub == ""
+
+
+# --- identity claims (acr, auth_time, sid, groups, service accounts) ---
+
+
+def _claims(**extra) -> dict:
+    now = int(time.time())
+    return {
+        "sub": "user-123",
+        "iss": "https://kc/realms/r",
+        "aud": "my-client",
+        "azp": "my-client",
+        "exp": now + 3600,
+        "iat": now,
+        **extra,
+    }
+
+
+def test_token_payload_exposes_session_claims_and_keeps_them_in_extra():
+    """acr, auth_time and sid are readable as properties; extra is unchanged."""
+    payload = TokenPayload.from_claims(_claims(acr="1", auth_time=1700, sid="s-1"))
+    assert (payload.acr, payload.auth_time, payload.sid) == ("1", 1700, "s-1")
+    assert payload.extra["acr"] == "1"
+    assert payload.extra["sid"] == "s-1"
+
+
+def test_token_payload_session_claims_default_to_none():
+    payload = TokenPayload.from_claims(_claims())
+    assert (payload.acr, payload.auth_time, payload.sid) == (None, None, None)
+
+
+def test_from_token_maps_identity_claims():
+    """iss and azp identify the user and client; acr/auth_time/sid the login."""
+    payload = TokenPayload.from_claims(
+        _claims(acr="2", auth_time=1700, sid="s-1", groups=["staff", "/ops/oncall"])
+    )
+    user = KeycloakUser.from_token(payload)
+    assert user.iss == "https://kc/realms/r"
+    assert user.azp == "my-client"
+    assert (user.acr, user.auth_time, user.sid) == ("2", 1700, "s-1")
+    assert user.groups == frozenset({"staff", "/ops/oncall"})
+    assert user.has_group("staff")
+    assert not user.has_group("ops")
+    assert user.is_service_account is False
+
+
+def test_from_token_reads_groups_from_a_custom_claim():
+    payload = TokenPayload.from_claims(_claims(teams=["blue"], groups=["ignored"]))
+    user = KeycloakUser.from_token(payload, groups_claim="teams")
+    assert user.groups == frozenset({"blue"})
+
+
+def test_from_token_ignores_a_non_list_groups_claim():
+    """A mapper misconfigured to emit a string must not split it into letters."""
+    user = KeycloakUser.from_token(TokenPayload.from_claims(_claims(groups="staff")))
+    assert user.groups == frozenset()
+
+
+@pytest.mark.parametrize("claim", ["client_id", "clientId"])
+def test_from_token_detects_service_account(claim):
+    """Keycloak marks client_credentials tokens with client_id (clientId pre-24)."""
+    payload = TokenPayload.from_claims(_claims(**{claim: "my-service"}))
+    assert KeycloakUser.from_token(payload).is_service_account is True

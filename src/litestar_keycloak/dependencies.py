@@ -6,7 +6,9 @@ route handlers can declare them as parameters without any manual wiring.
 Each provider reads from the connection state populated by the auth backend.
 
 Handlers should annotate with ``CurrentUser``, ``CurrentTokenPayload`` and
-``CurrentRawToken``.  Bare annotations (``current_user: KeycloakUser``) still
+``CurrentRawToken`` — or, on routes with optional auth, ``OptionalCurrentUser``,
+``OptionalTokenPayload`` and ``OptionalRawToken``, which are ``None`` for an
+anonymous request.  Bare annotations (``current_user: KeycloakUser``) still
 work but are deprecated by litestar and stop working in litestar 3.0.
 """
 
@@ -29,6 +31,9 @@ if TYPE_CHECKING:
     type CurrentUser = NamedDependency[KeycloakUser]
     type CurrentTokenPayload = NamedDependency[TokenPayload]
     type CurrentRawToken = NamedDependency[str]
+    type OptionalCurrentUser = NamedDependency[KeycloakUser | None]
+    type OptionalTokenPayload = NamedDependency[TokenPayload | None]
+    type OptionalRawToken = NamedDependency[str | None]
 else:
     try:
         from litestar.di import NamedDependency
@@ -36,36 +41,46 @@ else:
         CurrentUser = NamedDependency[KeycloakUser]
         CurrentTokenPayload = NamedDependency[TokenPayload]
         CurrentRawToken = NamedDependency[str]
+        OptionalCurrentUser = NamedDependency[KeycloakUser | None]
+        OptionalTokenPayload = NamedDependency[TokenPayload | None]
+        OptionalRawToken = NamedDependency[str | None]
     except ImportError:  # litestar < 2.23 has no NamedDependency marker
         CurrentUser = KeycloakUser
         CurrentTokenPayload = TokenPayload
         CurrentRawToken = str
+        OptionalCurrentUser = KeycloakUser | None
+        OptionalTokenPayload = TokenPayload | None
+        OptionalRawToken = str | None
 
 
-async def _provide_current_user(request: Request[Any, Any, Any]) -> KeycloakUser:
-    """Provide the authenticated ``KeycloakUser``.
+async def _provide_current_user(
+    request: Request[Any, Any, Any],
+) -> KeycloakUser | None:
+    """Provide the authenticated ``KeycloakUser`` (``None`` if anonymous).
 
     Reads from ``request.user`` which is set by
     ``AuthenticationResult`` in the auth middleware.
     """
-    return cast("KeycloakUser", request.user)
+    return cast("KeycloakUser | None", request.user)
 
 
-async def _provide_token_payload(request: Request[Any, Any, Any]) -> TokenPayload:
-    """Provide the decoded ``TokenPayload``.
+async def _provide_token_payload(
+    request: Request[Any, Any, Any],
+) -> TokenPayload | None:
+    """Provide the decoded ``TokenPayload`` (``None`` for an anonymous request).
 
     Reads from ``request.state`` where the auth middleware stashes
     the validated payload.
     """
-    return cast("TokenPayload", request.state[TOKEN_STATE_KEY])
+    return cast("TokenPayload | None", request.state.get(TOKEN_STATE_KEY))
 
 
-async def _provide_raw_token(request: Request[Any, Any, Any]) -> str:
-    """Provide the raw JWT string.
+async def _provide_raw_token(request: Request[Any, Any, Any]) -> str | None:
+    """Provide the raw JWT string (``None`` for an anonymous request).
 
     Useful for forwarding the token to downstream services.
     """
-    return cast("str", request.state[RAW_TOKEN_STATE_KEY])
+    return cast("str | None", request.state.get(RAW_TOKEN_STATE_KEY))
 
 
 def build_dependencies() -> dict[str, Provide]:

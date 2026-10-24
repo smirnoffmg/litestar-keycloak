@@ -6,7 +6,6 @@
 """
 
 import dataclasses
-import re
 import urllib.parse
 
 import httpx
@@ -48,28 +47,6 @@ def _obtain_service_token(base_url: str) -> str:
     return resp.json()["access_token"]
 
 
-def _browser_login(authorize_url: str, username: str, password: str) -> str:
-    """Drive Keycloak's HTML login form; return the callback redirect (with code)."""
-    with httpx.Client(follow_redirects=False, timeout=30) as client:
-        page = client.get(authorize_url)
-        page.raise_for_status()
-        match = re.search(
-            r'action="(?P<url>[^"]*login-actions/authenticate[^"]*)"', page.text
-        )
-        assert match, "Keycloak login form not found on the authorization page"
-        action = match.group("url").replace("&amp;", "&")
-        # Keycloak sets its session cookies as SameSite=None; Secure, which httpx
-        # will not resend over plain http — forward them explicitly.
-        cookie_header = "; ".join(f"{k}={v}" for k, v in client.cookies.items())
-        resp = client.post(
-            action,
-            data={"username": username, "password": password},
-            headers={"Cookie": cookie_header},
-        )
-        assert resp.status_code in (302, 303), f"login POST -> {resp.status_code}"
-        return resp.headers["location"]
-
-
 def _query_param(url: str, name: str) -> str:
     return urllib.parse.parse_qs(urllib.parse.urlparse(url).query)[name][0]
 
@@ -102,7 +79,9 @@ def test_service_to_service_token_accepted(keycloak_config, keycloak_container):
 
 @pytest.mark.integration
 @pytest.mark.timeout(120)
-def test_spa_json_callback_then_bearer(keycloak_config, keycloak_container):
+def test_spa_json_callback_then_bearer(
+    keycloak_config, keycloak_container, browser_login
+):
     """json mode: callback returns tokens, then the access token works as Bearer."""
     config = _routes_config(keycloak_config, callback_response_mode="json")
 
@@ -115,7 +94,7 @@ def test_spa_json_callback_then_bearer(keycloak_config, keycloak_container):
         login = client.get("/auth/login", follow_redirects=False)
         authorize_url = login.headers["location"]
         state = _query_param(authorize_url, "state")
-        callback_url = _browser_login(authorize_url, "testuser", "testpass")
+        callback_url = browser_login(authorize_url, "testuser", "testpass")
         code = _query_param(callback_url, "code")
 
         callback = client.get(f"/auth/callback?code={code}&state={state}")
@@ -132,7 +111,7 @@ def test_spa_json_callback_then_bearer(keycloak_config, keycloak_container):
 
 @pytest.mark.integration
 @pytest.mark.timeout(120)
-def test_classic_web_session_flow(keycloak_config, keycloak_container):
+def test_classic_web_session_flow(keycloak_config, keycloak_container, browser_login):
     """redirect mode: login stores tokens in the session; the session authenticates."""
     config = _routes_config(keycloak_config, callback_response_mode="redirect")
     session_config = ServerSideSessionConfig()
@@ -154,7 +133,7 @@ def test_classic_web_session_flow(keycloak_config, keycloak_container):
         login = client.get("/auth/login", follow_redirects=False)
         authorize_url = login.headers["location"]
         state = _query_param(authorize_url, "state")
-        callback_url = _browser_login(authorize_url, "testuser", "testpass")
+        callback_url = browser_login(authorize_url, "testuser", "testpass")
         code = _query_param(callback_url, "code")
 
         callback = client.get(
