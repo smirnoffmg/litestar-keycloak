@@ -10,9 +10,18 @@ them by hand.
 from __future__ import annotations
 
 import enum
+import logging
 import re
 from dataclasses import dataclass, field
 from typing import Literal
+
+logger = logging.getLogger(__name__)
+
+#: JWS ``alg`` families a realm's JWKS can verify: its keys are public, so
+#: HMAC (``HS*``) and ``none`` never can.
+_PUBLIC_KEY_ALG_PREFIXES = ("RS", "PS", "ES", "Ed")
+
+_AUTH_PREFIX_RE = re.compile(r"(/[^/]+)+")
 
 
 class TokenLocation(enum.Enum):
@@ -325,3 +334,36 @@ class KeycloakConfig:
             raise ValueError("backchannel_logout requires include_routes=True")
         if self.validate_id_token and "openid" not in self.scopes:
             raise ValueError('validate_id_token requires "openid" in scopes')
+        if self.cookie_samesite == "none" and not self.cookie_secure:
+            # Browsers drop such cookies, so every login would fail its state check.
+            raise ValueError('cookie_samesite="none" requires cookie_secure=True')
+        if not _AUTH_PREFIX_RE.fullmatch(self.auth_prefix):
+            raise ValueError(
+                f"auth_prefix must look like '/auth' (no trailing slash), "
+                f"got {self.auth_prefix!r}"
+            )
+        self._check_algorithms()
+        if self.optional_audiences and not self.strict_audience:
+            logger.warning(
+                "optional_audiences without strict_audience=True also accepts any "
+                "token whose azp is one of them, whatever its aud: %s",
+                ", ".join(sorted(self.optional_audiences)),
+            )
+
+    def _check_algorithms(self) -> None:
+        unusable = [
+            alg
+            for alg in self.algorithms
+            if not alg.startswith(_PUBLIC_KEY_ALG_PREFIXES)
+        ]
+        if len(unusable) == len(self.algorithms):
+            raise ValueError(
+                "algorithms must include a public-key algorithm (RS*, PS*, ES*, "
+                f"EdDSA), got {self.algorithms!r}"
+            )
+        if unusable:
+            logger.warning(
+                "algorithms %s cannot verify Keycloak tokens; tokens using them "
+                "are refused",
+                ", ".join(unusable),
+            )

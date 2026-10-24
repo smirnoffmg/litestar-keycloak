@@ -51,7 +51,7 @@ For the redirect-mode flow (session middleware, endpoint behavior) see the [OIDC
 | --------------------- | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `audience`            | `None`        | Expected `aud` claim; defaults to `client_id` when `None`.                                                                                                                        |
 | `optional_audiences`  | `frozenset()` | Additional audiences to accept (e.g. a service client ID). Tokens with `aud` or `azp` in this set (or the primary audience) are accepted; with `strict_audience=True`, only `aud` counts. |
-| `strict_audience`     | `False`       | If `True`, accept a token only when its `aud` (string or list) contains the primary audience or one of `optional_audiences`. `azp` is ignored, and a token without `aud` gets `401`. Add a Keycloak Audience mapper before enabling it — see [Service-to-service](guides/service-to-service.md#requiring-the-audience-in-aud-strict_audience). |
+| `strict_audience`     | `False`       | If `True`, accept a token only when its `aud` (string or list) contains the primary audience or one of `optional_audiences`. `azp` is ignored, and a token without `aud` gets `401`. **Recommended**: without it, a token another API received from the same client (`azp`) is accepted here too. Add a Keycloak Audience mapper before enabling it — see [Service-to-service](guides/service-to-service.md#requiring-the-audience-in-aud-strict_audience). |
 | `expected_issuer`     | `None`        | Expected `iss` claim; defaults to `{server_url}/realms/{realm}`. Set when Keycloak's frontend/hostname URL differs from `server_url` (e.g. behind a reverse proxy), so `iss` validation matches the value Keycloak signs. |
 | `algorithms`          | `("RS256",)`  | Accepted JWT signing algorithms. RSA (`RS*`, `PS*`), EC (`ES*`) and Ed25519 (`EdDSA`) keys are supported; add e.g. `"ES256"` when the realm signs with an `ecdsa-generated` key provider. A token whose `alg` does not match the key type of its `kid` gets `401`. |
 | `groups_claim`        | `"groups"`    | Claim holding the user's groups, as named on Keycloak's Group Membership mapper. See [Guards](guides/guards.md#groups-require_groups). |
@@ -144,6 +144,10 @@ Endpoint URLs are built from the template above — the plugin does not fetch th
 - `introspection_cache_ttl < 0` -> `ValueError`.
 - `session_auto_refresh=True` without `callback_response_mode="redirect"` -> `ValueError`.
 - `session_binding=True` without `callback_response_mode="redirect"` -> `ValueError`.
+- `cookie_samesite="none"` without `cookie_secure=True` -> `ValueError` (browsers drop such cookies).
+- `auth_prefix` not of the form `/auth` or `/api/auth` (no trailing slash) -> `ValueError`.
+- `algorithms` without any `RS*`, `PS*`, `ES*` or `EdDSA` entry -> `ValueError`; `HS*` or `none` next to them is logged at `WARNING`, since JWKS keys are public and cannot verify them.
+- `optional_audiences` without `strict_audience=True` is logged at `WARNING`: lenient checking also accepts a token whose `azp` is an optional audience, whatever its `aud`.
 - `backchannel_logout=True` without `include_routes=True` -> `ValueError`.
 - `validate_id_token=True` without `"openid"` in `scopes` -> `ValueError`.
 

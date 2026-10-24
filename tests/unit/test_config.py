@@ -1,5 +1,7 @@
 """Unit tests for KeycloakConfig validation and derived properties."""
 
+import logging
+
 import pytest
 
 from litestar_keycloak.config import KeycloakConfig, TokenLocation
@@ -379,3 +381,53 @@ def test_session_binding_requires_redirect_mode():
         KeycloakConfig(
             server_url="http://kc", realm="r", client_id="c", session_binding=True
         )
+
+
+# --- configurations that cannot work are refused at construction ---
+
+
+def _cfg(**kwargs):
+    return KeycloakConfig(server_url="http://kc", realm="r", client_id="c", **kwargs)
+
+
+def test_samesite_none_requires_secure_cookies():
+    """Browsers drop SameSite=None cookies without Secure: every login would fail."""
+    with pytest.raises(ValueError, match="cookie_samesite"):
+        _cfg(cookie_samesite="none", cookie_secure=False)
+    _cfg(cookie_samesite="none", cookie_secure=True)
+
+
+@pytest.mark.parametrize("prefix", ["/auth/", "auth", "/", "", "/a//b"])
+def test_auth_prefix_must_be_a_clean_path(prefix):
+    """A trailing slash broke the auth route exclusions: /auth/login needed a token."""
+    with pytest.raises(ValueError, match="auth_prefix"):
+        _cfg(auth_prefix=prefix)
+
+
+@pytest.mark.parametrize("prefix", ["/auth", "/api/v1/auth"])
+def test_auth_prefix_accepts_nested_paths(prefix):
+    assert _cfg(auth_prefix=prefix).auth_prefix == prefix
+
+
+@pytest.mark.parametrize("algorithms", [(), ("HS256",), ("none",)])
+def test_algorithms_must_include_a_public_key_algorithm(algorithms):
+    """JWKS keys are public: HMAC or none can never verify a Keycloak token."""
+    with pytest.raises(ValueError, match="algorithms"):
+        _cfg(algorithms=algorithms)
+
+
+def test_unusable_extra_algorithm_is_logged(caplog):
+    with caplog.at_level(logging.WARNING, logger="litestar_keycloak.config"):
+        _cfg(algorithms=("RS256", "HS256"))
+    assert "HS256" in caplog.text
+
+
+def test_optional_audiences_without_strict_audience_is_logged(caplog):
+    """Lenient checking accepts any token whose azp is an optional audience."""
+    with caplog.at_level(logging.WARNING, logger="litestar_keycloak.config"):
+        _cfg(optional_audiences=frozenset({"frontend-spa"}))
+    assert "strict_audience" in caplog.text
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="litestar_keycloak.config"):
+        _cfg(optional_audiences=frozenset({"frontend-spa"}), strict_audience=True)
+    assert caplog.text == ""
