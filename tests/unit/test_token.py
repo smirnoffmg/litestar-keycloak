@@ -578,3 +578,27 @@ async def test_verify_logout_token_rejects(token_verifier, rsa_keypair, kwargs, 
     """An access or ID token, or a token for another client, cannot log anyone out."""
     with pytest.raises(error):
         await token_verifier.verify_logout_token(_logout_token(rsa_keypair, **kwargs))
+
+
+@pytest.mark.parametrize(
+    "drop", [("sub",), ("sub", "preferred_username")], ids=["no-sub", "no-identity"]
+)
+async def test_require_sub_refuses_tokens_without_sub(
+    keycloak_config, test_jwk, rsa_keypair, drop
+):
+    """Without basic scope, sub would fall back to a reassignable username."""
+    private_key, _ = rsa_keypair
+    claims = {
+        k: v for k, v in _claims(preferred_username="alice").items() if k not in drop
+    }
+    token = jwt.encode(
+        claims, private_key, algorithm="RS256", headers={"kid": "test-kid"}
+    )
+    lenient = TokenVerifier(keycloak_config, _KeyByKid({"test-kid": test_jwk}))  # type: ignore[arg-type]
+    strict = TokenVerifier(
+        dataclasses.replace(keycloak_config, require_sub=True),
+        _KeyByKid({"test-kid": test_jwk}),  # type: ignore[arg-type]
+    )
+    assert (await lenient.verify(token)).sub == ("alice" if drop == ("sub",) else "")
+    with pytest.raises(TokenDecodeError, match="sub"):
+        await strict.verify(token)

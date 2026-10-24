@@ -130,7 +130,7 @@ If `connection.user` is not a **KeycloakUser** (e.g. an excluded path, or an ano
 
 `KeycloakUser` exposes `iss`, `sub`, `azp`, `groups`, `acr`, `auth_time`, `sid` and `is_service_account` (true for client_credentials tokens). To key data by user, use `iss` together with `sub` — never `preferred_username`, which can be reassigned.
 
-Since Keycloak 25, `sub` comes from the `basic` client scope. A client whose default scopes leave `basic` out gets access tokens **without `sub`**, and the plugin then falls back to `preferred_username` for `KeycloakUser.sub`. Keep `basic` among the client's default scopes.
+Since Keycloak 25, `sub` comes from the `basic` client scope. A client whose default scopes leave `basic` out gets access tokens **without `sub`**, and the plugin then falls back to `preferred_username` for `KeycloakUser.sub`. Keep `basic` among the client's default scopes, and set `require_sub=True` so a client that lacks it is refused instead of silently keyed by username.
 
 ## Combining guards
 

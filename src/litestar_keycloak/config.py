@@ -190,6 +190,12 @@ class KeycloakConfig:
     ``True``, add a Keycloak Audience mapper (``oidc-audience-mapper``) to the
     clients that call this API."""
 
+    require_sub: bool = False
+    """Refuse a token without a ``sub`` claim.  ``False`` (default) falls back
+    to ``preferred_username``, which Keycloak 25+ hands out instead of ``sub``
+    when a client lacks the ``basic`` scope; a username can be reassigned, so
+    data keyed by it may reach the next holder of the name."""
+
     expected_token_type: str | None = "Bearer"
     """Required payload ``typ`` claim.  ``"Bearer"`` (default) rejects Keycloak
     ID and Refresh tokens presented as access tokens.  Set to ``None`` to disable

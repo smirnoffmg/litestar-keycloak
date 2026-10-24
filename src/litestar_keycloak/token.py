@@ -420,6 +420,10 @@ class TokenVerifier:
             raise TokenDecodeError(str(exc)) from exc
 
     def _validate_claims(self, claims: dict[str, Any]) -> None:
+        if self._config.require_sub and not claims.get("sub"):
+            raise TokenDecodeError(
+                "Token has no sub claim; add the basic client scope in Keycloak"
+            )
         expected_typ = self._config.expected_token_type
         if expected_typ is not None:
             actual_typ = claims.get("typ", "")
