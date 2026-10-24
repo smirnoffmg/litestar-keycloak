@@ -91,7 +91,7 @@ This uses Keycloak's **standard token exchange**, available from **Keycloak 26.2
 - the incoming token's `aud` contains this client — e.g. an Audience mapper on the frontend client (and then `strict_audience=True` here costs nothing);
 - the requested `audience` is available to this client — e.g. an Audience mapper for `billing` on this client.
 
-Exchanged tokens are not cached. If Keycloak refuses (`audience` not available, exchange not enabled, invalid subject token) or cannot be reached, the call raises `ServiceTokenError` — a `502` if left unhandled. Its `error` and `error_description` attributes (also logged at `WARNING`) say why; the response body only names the error code.
+Exchanged tokens are not cached. If Keycloak refuses (`audience` not available, exchange not enabled, invalid subject token) or cannot be reached, the call raises `ServiceTokenError` — a `502` if left unhandled. Its `error` and `error_description` attributes (also logged at `WARNING`) say why; the response body is a generic `Keycloak request failed`.
 
 ## Forwarding the user token
 When your Litestar app calls a downstream API that also validates Keycloak tokens, you can forward the current user's token so the downstream service sees the same identity.

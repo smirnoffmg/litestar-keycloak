@@ -25,13 +25,14 @@ import secrets
 import urllib.parse
 from typing import TYPE_CHECKING, Any
 
+import aiohttp
 from litestar import Controller, Response, get, post
 from litestar.datastructures import Cookie
-from litestar.exceptions import NotAuthorizedException
+from litestar.exceptions import NotAuthorizedException, SerializationException
 from litestar.response import Redirect
 
 from litestar_keycloak.auth import SESSION_ACCESS_TOKEN_KEY, SESSION_REFRESH_TOKEN_KEY
-from litestar_keycloak.exceptions import AuthenticationError
+from litestar_keycloak.exceptions import AuthenticationError, TokenEndpointError
 from litestar_keycloak.logout import record_logout
 
 if TYPE_CHECKING:
@@ -43,7 +44,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-#: OIDC Back-Channel Logout 1.0 §2.8: responses must not be cached.
+#: RFC 6749 §5.1 for responses carrying tokens; OIDC Back-Channel Logout 1.0
+#: §2.8 for the logout endpoint.
 _NO_STORE = {"Cache-Control": "no-store"}
 
 #: Name of the short-lived HttpOnly cookie holding the OAuth ``state`` value.
@@ -156,7 +158,7 @@ def build_auth_controller(
                 _store_session_tokens(request, token_data)
                 response = Redirect(config.post_login_redirect_uri)
             else:
-                response = Response(content=token_data)
+                response = Response(content=token_data, headers=_NO_STORE)
 
             for name in (STATE_COOKIE_NAME, PKCE_COOKIE_NAME, NONCE_COOKIE_NAME):
                 response.delete_cookie(name, path=config.auth_prefix)
@@ -175,10 +177,13 @@ def build_auth_controller(
             if redirect_mode:
                 refresh_token = _session(request).get(SESSION_REFRESH_TOKEN_KEY, "")
             else:
-                refresh_token = (await request.json()).get("refresh_token", "")
+                refresh_token = await _body_refresh_token(request)
 
             if refresh_token:
-                await _keycloak_logout(config, refresh_token, http=http)
+                try:
+                    await _keycloak_logout(config, refresh_token, http=http)
+                except (aiohttp.ClientError, OSError) as exc:
+                    logger.warning("Keycloak logout failed: %s", exc)
 
             response: Response[dict[str, str]] | Redirect
             if redirect_mode:
@@ -205,7 +210,7 @@ def build_auth_controller(
             if redirect_mode:
                 refresh_token = _session(request).get(SESSION_REFRESH_TOKEN_KEY, "")
             else:
-                refresh_token = (await request.json()).get("refresh_token", "")
+                refresh_token = await _body_refresh_token(request)
 
             if not refresh_token:
                 raise NotAuthorizedException(detail="Missing refresh_token")
@@ -215,7 +220,7 @@ def build_auth_controller(
             if redirect_mode:
                 _store_session_tokens(request, token_data)
                 return Response(content={"status": "refreshed"})
-            return Response(content=token_data)
+            return Response(content=token_data, headers=_NO_STORE)
 
         if config.backchannel_logout:
 
@@ -286,6 +291,16 @@ def _client_auth(config: KeycloakConfig) -> dict[str, str]:
     return {"client_id": config.client_id, "client_secret": config.client_secret}
 
 
+async def _body_refresh_token(request: Request[Any, Any, Any]) -> str:
+    """The ``refresh_token`` of a JSON object body; ``""`` for anything else."""
+    try:
+        body = await request.json()
+    except SerializationException:
+        return ""
+    token = body.get("refresh_token") if isinstance(body, dict) else None
+    return token if isinstance(token, str) else ""
+
+
 def _session(request: Request[Any, Any, Any]) -> dict[str, Any]:
     """Return the request session (raises if no session middleware is installed)."""
     return request.session
@@ -315,8 +330,24 @@ def _clear_session_tokens(request: Request[Any, Any, Any]) -> None:
 async def _token_request(
     config: KeycloakConfig, form_data: dict[str, str], *, http: KeycloakHttpClient
 ) -> dict[str, Any]:
-    """POST to Keycloak's token endpoint and return the JSON response."""
-    return await http.post_form(config.token_url, form_data)
+    """POST to Keycloak's token endpoint and return the JSON response.
+
+    Keycloak refusing the grant (400/401: code reused or expired, refresh
+    token revoked) is the caller's 401; any other failure is Keycloak's, a 502.
+    """
+    grant = form_data.get("grant_type", "")
+    try:
+        token_data = await http.post_form(config.token_url, form_data)
+    except aiohttp.ClientResponseError as exc:
+        if exc.status in (400, 401):
+            logger.info("Keycloak rejected the %s grant: %s", grant, exc.status)
+            raise NotAuthorizedException(detail="Token request rejected") from exc
+        raise TokenEndpointError(f"Token endpoint failed: {exc}") from exc
+    except (aiohttp.ClientError, OSError, ValueError) as exc:
+        raise TokenEndpointError(f"Token endpoint failed: {exc}") from exc
+    if not isinstance(token_data, dict):
+        raise TokenEndpointError("Token endpoint returned a non-object body")
+    return token_data
 
 
 async def _exchange_code(

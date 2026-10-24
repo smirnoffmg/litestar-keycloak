@@ -103,8 +103,7 @@ def test_authentication_error_handler_returns_401_json():
     assert response.status_code == 401
     assert response.media_type == "application/json"
     content = response.content
-    assert isinstance(content, dict) and "error" in content
-    assert "header" in content["error"] or "token" in content["error"].lower()
+    assert content == {"error": "No token found in header"}
 
 
 def test_authorization_error_handler_returns_403_json():
@@ -115,8 +114,7 @@ def test_authorization_error_handler_returns_403_json():
     assert response.status_code == 403
     assert response.media_type == "application/json"
     content = response.content
-    assert isinstance(content, dict) and "error" in content
-    assert "admin" in content["error"] or "Missing roles" in content["error"]
+    assert content == {"error": "Missing roles: admin"}
 
 
 def test_backend_error_handler_returns_502_json():
@@ -126,8 +124,16 @@ def test_backend_error_handler_returns_502_json():
     response = handler(_mock_request(), exc)
     assert response.status_code == 502
     assert response.media_type == "application/json"
-    content = response.content
-    assert isinstance(content, dict) and "error" in content
+    assert response.content == {"error": "Keycloak request failed"}
+
+
+def test_backend_error_detail_is_logged_not_returned(caplog):
+    """Keycloak's internal URL and the network error stay out of the body."""
+    exc = JWKSFetchError("Failed to fetch http://kc.internal:8080/certs: refused")
+    with caplog.at_level(logging.WARNING, logger="litestar_keycloak.exceptions"):
+        response = exception_handlers[KeycloakBackendError](_mock_request(), exc)
+    assert "kc.internal" not in str(response.content)
+    assert "kc.internal" in caplog.text
 
 
 def test_handler_does_not_leak_stack_trace():
@@ -337,3 +343,17 @@ def test_introspection_error_is_502():
         _mock_request(), IntrospectionError("down")
     )
     assert response.status_code == 502
+
+
+def test_unknown_signing_key_resolves_to_the_401_handler():
+    """Litestar picks handlers by MRO; the authentication side must come first."""
+    from litestar.middleware._internal.exceptions.middleware import (
+        get_exception_handler,
+    )
+
+    from litestar_keycloak.exceptions import UnknownSigningKeyError
+
+    exc = UnknownSigningKeyError("Key 'x' not found in JWKS after refresh")
+    handler = get_exception_handler(exception_handlers, exc)
+    assert handler is not None
+    assert handler(_mock_request(), exc).status_code == 401

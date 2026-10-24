@@ -27,6 +27,7 @@ from litestar_keycloak.exceptions import (
     JWKSFetchError,
     TokenDecodeError,
     TokenExpiredError,
+    UnknownSigningKeyError,
 )
 from litestar_keycloak.models import TokenPayload
 
@@ -99,7 +100,7 @@ class JWKSCache:
         if key is not None:
             return key
 
-        raise JWKSFetchError(f"Key {kid!r} not found in JWKS after refresh")
+        raise UnknownSigningKeyError(f"Key {kid!r} not found in JWKS after refresh")
 
     async def warm(self) -> None:
         """Pre-populate the cache.  Called once during plugin startup."""

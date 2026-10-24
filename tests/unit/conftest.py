@@ -7,7 +7,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from jwt import PyJWK
 
 from litestar_keycloak.config import KeycloakConfig
-from litestar_keycloak.exceptions import JWKSFetchError
+from litestar_keycloak.exceptions import UnknownSigningKeyError
 from litestar_keycloak.token import JWKSCache, TokenVerifier
 
 
@@ -51,7 +51,7 @@ class MockJWKSCache:
 
     async def get_key(self, kid: str) -> PyJWK:
         if kid != self._kid:
-            raise JWKSFetchError(f"Key {kid!r} not found in JWKS after refresh")
+            raise UnknownSigningKeyError(f"Key {kid!r} not found in JWKS after refresh")
         return self._jwk
 
     async def warm(self) -> None:

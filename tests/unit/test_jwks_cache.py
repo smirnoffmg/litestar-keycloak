@@ -8,7 +8,7 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric import ec, ed25519, rsa
 from jwt.algorithms import ECAlgorithm, OKPAlgorithm
 
-from litestar_keycloak.exceptions import JWKSFetchError
+from litestar_keycloak.exceptions import JWKSFetchError, TokenDecodeError
 from litestar_keycloak.http_client import KeycloakHttpClient
 from litestar_keycloak.token import MIN_FORCED_REFRESH_INTERVAL, JWKSCache
 
@@ -348,3 +348,15 @@ async def test_ec_encryption_key_is_skipped():
         pytest.raises(JWKSFetchError, match="enc-kid"),
     ):
         await cache.get_key("enc-kid")
+
+
+async def test_unknown_kid_is_an_invalid_token_not_a_backend_failure():
+    """A made-up kid is the caller's fault (401); old JWKSFetchError catches hold."""
+    cache = JWKSCache("http://example.com/jwks", ttl=3600, http=KeycloakHttpClient(10))
+    jwks = _jwks_response()
+    with (
+        patch.object(cache, "_fetch_jwks", new_callable=AsyncMock, return_value=jwks),
+        pytest.raises(TokenDecodeError) as info,
+    ):
+        await cache.get_key("attacker-chosen")
+    assert isinstance(info.value, JWKSFetchError)

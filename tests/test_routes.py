@@ -3,8 +3,9 @@
 import base64
 import hashlib
 import urllib.parse
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import aiohttp
 import pytest
 from litestar import Litestar, Request, get
 from litestar.middleware.session.server_side import ServerSideSessionConfig
@@ -288,20 +289,6 @@ def test_login_state_is_cryptographically_random(app_with_routes):
     state2 = q2.get("state", [""])[0]
     assert state1 != state2
     assert len(state1) >= 32 and len(state2) >= 32
-
-
-@patch("litestar_keycloak.routes._keycloak_logout", new_callable=AsyncMock)
-def test_logout_clears_session_even_when_keycloak_call_fails(
-    mock_logout, app_with_routes
-):
-    """When _keycloak_logout raises, logout returns 2xx or 5xx (current: 5xx)."""
-    mock_logout.side_effect = Exception("Keycloak unreachable")
-    with TestClient(app_with_routes) as client:
-        resp = client.post("/auth/logout", json={"refresh_token": "rt123"})
-    # Current implementation does not catch; exception propagates -> 500
-    assert resp.status_code in (200, 201, 500)
-    if resp.status_code in (200, 201):
-        assert resp.json().get("status") == "logged_out"
 
 
 @patch("litestar_keycloak.routes._token_request", new_callable=AsyncMock)
@@ -713,3 +700,98 @@ def test_callback_non_ascii_state_is_401_not_500(app_with_routes):
         _login_state(client)
         resp = client.get("/auth/callback?code=c&state=%D1%8F")
     assert resp.status_code == 401
+
+
+# --- Keycloak refusing or failing a token request is a 401/502, never a 500 ---
+
+
+def _http_error(status: int) -> aiohttp.ClientResponseError:
+    return aiohttp.ClientResponseError(MagicMock(), (), status=status)
+
+
+def _post_form(**kwargs):
+    return patch(
+        "litestar_keycloak.http_client.KeycloakHttpClient.post_form",
+        new_callable=AsyncMock,
+        **kwargs,
+    )
+
+
+_UNREACHABLE = aiohttp.ClientConnectionError("Cannot connect to http://kc.internal")
+
+
+@pytest.mark.parametrize(
+    ("outcome", "expected"),
+    [
+        ({"side_effect": _http_error(400)}, 401),
+        ({"side_effect": _http_error(401)}, 401),
+        ({"side_effect": _http_error(503)}, 502),
+        ({"side_effect": _UNREACHABLE}, 502),
+        ({"return_value": ["not", "an", "object"]}, 502),
+    ],
+    ids=["code-reused", "bad-client", "keycloak-503", "unreachable", "non-object"],
+)
+def test_callback_token_endpoint_failure(app_with_routes, outcome, expected):
+    with TestClient(app_with_routes) as client, _post_form(**outcome):
+        state = _login_state(client)
+        resp = client.get(f"/auth/callback?code=used&state={state}")
+    assert resp.status_code == expected
+    assert "kc.internal" not in resp.text
+
+
+@pytest.mark.parametrize(
+    ("outcome", "expected"),
+    [
+        ({"side_effect": _http_error(400)}, 401),
+        ({"side_effect": _http_error(503)}, 502),
+        ({"side_effect": _UNREACHABLE}, 502),
+    ],
+    ids=["refresh-expired", "keycloak-503", "unreachable"],
+)
+def test_refresh_token_endpoint_failure(app_with_routes, outcome, expected):
+    with TestClient(app_with_routes) as client, _post_form(**outcome):
+        resp = client.post("/auth/refresh", json={"refresh_token": "expired"})
+    assert resp.status_code == expected
+    assert "kc.internal" not in resp.text
+
+
+@pytest.mark.parametrize(
+    "body",
+    [b"not json", b'["x"]', b'{"refresh_token": 42}'],
+    ids=["not-json", "array", "non-string"],
+)
+@pytest.mark.parametrize("path", ["/auth/refresh", "/auth/logout"])
+def test_malformed_body_is_not_a_500(app_with_routes, path, body):
+    with TestClient(app_with_routes) as client, _post_form(return_value={}):
+        resp = client.post(
+            path, content=body, headers={"Content-Type": "application/json"}
+        )
+    assert resp.status_code < 500
+
+
+def test_logout_succeeds_when_keycloak_is_unreachable(app_with_routes):
+    """Logout is best-effort: the local session ends even if Keycloak does not."""
+    with (
+        TestClient(app_with_routes) as client,
+        patch(
+            "litestar_keycloak.http_client.KeycloakHttpClient.post_form_discard",
+            new_callable=AsyncMock,
+            side_effect=_UNREACHABLE,
+        ),
+    ):
+        resp = client.post("/auth/logout", json={"refresh_token": "rt"})
+    assert resp.status_code == 201
+    assert resp.json() == {"status": "logged_out"}
+
+
+def test_token_responses_are_not_cacheable(app_with_routes):
+    """RFC 6749 §5.1: a response carrying tokens must be no-store."""
+    tokens = {"access_token": "at", "refresh_token": "rt"}
+    with TestClient(app_with_routes) as client, _post_form(return_value=tokens):
+        state = _login_state(client)
+        callback = client.get(f"/auth/callback?code=c&state={state}")
+        refreshed = client.post("/auth/refresh", json={"refresh_token": "rt"})
+    assert callback.status_code == 200
+    assert refreshed.status_code == 201
+    assert callback.headers["cache-control"] == "no-store"
+    assert refreshed.headers["cache-control"] == "no-store"

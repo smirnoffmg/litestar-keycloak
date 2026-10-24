@@ -156,8 +156,21 @@ class JWKSFetchError(KeycloakBackendError):
     """Failed to retrieve the JSON Web Key Set from Keycloak."""
 
 
+class UnknownSigningKeyError(TokenDecodeError, JWKSFetchError):
+    """The token names a ``kid`` the realm's JWKS does not hold, even after a refresh.
+
+    The caller's fault, so a 401.  It also stays a ``JWKSFetchError``, as it
+    was before 0.3.5, so existing ``except`` clauses still catch it; Litestar
+    resolves handlers by MRO, where the ``AuthenticationError`` side comes first.
+    """
+
+
 class SessionRefreshError(KeycloakBackendError):
     """Refreshing the session's tokens failed for a reason other than rejection."""
+
+
+class TokenEndpointError(KeycloakBackendError):
+    """Keycloak's token endpoint failed a code exchange or refresh."""
 
 
 class ServiceTokenError(KeycloakBackendError):
@@ -262,9 +275,18 @@ def _handle_authorization_error(
 
 
 def _handle_backend_error(
-    _: Request[Any, Any, Any], exc: KeycloakBackendError
+    request: Request[Any, Any, Any], exc: KeycloakBackendError
 ) -> Response[dict[str, str]]:
-    return _error_response(502, str(exc))
+    # The detail names Keycloak's internal URL and the network error; the
+    # caller, often unauthenticated, gets neither.
+    logger.warning(
+        "Keycloak request failed: %s %s: %s: %s",
+        request.method,
+        request.url.path,
+        type(exc).__name__,
+        exc,
+    )
+    return _error_response(502, "Keycloak request failed")
 
 
 exception_handlers = {
