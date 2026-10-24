@@ -68,6 +68,16 @@ NONCE_COOKIE_NAME = "kc_oauth_nonce"
 #: subset, since the value arrives in the attacker-controllable query string.
 _ERROR_CODE_RE = re.compile(r"[A-Za-z0-9_.-]{1,64}")
 
+#: Authorization request parameters a client may pass through ``/auth/login``
+#: to answer a step-up challenge (RFC 9470 §4) or force re-authentication,
+#: each with the values it may take.  The browser could add them to the
+#: authorize URL itself; checking them keeps markup out of the redirect.
+_FORWARDED_LOGIN_PARAMS = {
+    "acr_values": re.compile(r"[A-Za-z0-9_.:-]{1,64}( [A-Za-z0-9_.:-]{1,64}){0,9}"),
+    "max_age": re.compile(r"[0-9]{1,9}"),
+    "prompt": re.compile(r"login|consent|select_account"),
+}
+
 #: Lifetime (seconds) of the OAuth ``state`` cookie — long enough to complete
 #: the round trip to Keycloak, short enough to bound replay.
 _STATE_COOKIE_MAX_AGE = 300
@@ -91,7 +101,12 @@ def build_auth_controller(
 
         @get("/login")
         async def login(self, request: Request[Any, Any, Any]) -> Redirect:
-            """Redirect the user to Keycloak's authorization endpoint."""
+            """Redirect the user to Keycloak's authorization endpoint.
+
+            ``acr_values``, ``max_age`` and ``prompt`` in the query are passed
+            on, so a step-up challenge can be answered by sending the user to
+            ``/auth/login?acr_values=…`` or ``?max_age=…``.
+            """
             state = secrets.token_urlsafe(32)
             params = {
                 "response_type": "code",
@@ -100,6 +115,10 @@ def build_auth_controller(
                 "scope": " ".join(config.scopes),
                 "state": state,
             }
+            for name, allowed in _FORWARDED_LOGIN_PARAMS.items():
+                value = request.query_params.get(name)
+                if value is not None and allowed.fullmatch(value):
+                    params[name] = value
             cookies = [_flow_cookie(config, STATE_COOKIE_NAME, state)]
             if config.use_pkce:
                 verifier_value = secrets.token_urlsafe(64)

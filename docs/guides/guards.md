@@ -87,7 +87,7 @@ WWW-Authenticate: Bearer error="insufficient_user_authentication",
   error_description="A different authentication level is required", acr_values="2"
 ```
 
-(or `max_age="300"` for `require_recent_auth`). The client then restarts the login with `acr_values=2` or `max_age=300` in the authorization request.
+(or `max_age="300"` for `require_recent_auth`). The client then restarts the login with `acr_values=2` or `max_age=300` in the authorization request. With `include_routes=True` that is `/auth/login?acr_values=2` or `/auth/login?max_age=300`: the login route passes `acr_values`, `max_age` and `prompt=login` on to Keycloak. For `acr_values` to take effect, the realm needs a step-up browser flow and an ACR-to-LoA mapping (*Realm settings → General → ACR to LoA Mapping*).
 
 Keycloak adds `acr` through the `acr` client scope and `auth_time` through the `basic` scope, and `auth_time` only for interactive logins (not, for example, for password grants). `require_recent_auth` rejects a token without `auth_time`, since its login age is unknown.
 

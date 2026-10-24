@@ -865,3 +865,55 @@ def test_session_binding_cookie_is_httponly_and_cleared_on_logout():
             logout, "kc_session_binding"
         )
         assert client.get("/me").status_code == 401
+
+
+# --- step-up: /auth/login forwards the RFC 9470 parameters ---
+
+
+def _login_query(client, query: str) -> dict:
+    resp = client.get(f"/auth/login{query}", follow_redirects=False)
+    location = urllib.parse.urlparse(resp.headers["location"]).query
+    return {k: v[0] for k, v in urllib.parse.parse_qs(location).items()}
+
+
+def test_login_forwards_step_up_parameters(app_with_routes):
+    """A 401 insufficient_user_authentication can be answered via /auth/login."""
+    with TestClient(app_with_routes) as client:
+        params = _login_query(client, "?acr_values=gold%20silver&max_age=0")
+    assert params["acr_values"] == "gold silver"
+    assert params["max_age"] == "0"
+
+
+def test_login_forwards_prompt_login(app_with_routes):
+    with TestClient(app_with_routes) as client:
+        assert _login_query(client, "?prompt=login")["prompt"] == "login"
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "?max_age=-1",
+        "?max_age=abc",
+        "?acr_values=%22%3E%3Cscript%3E",
+        "?prompt=none%20consent",
+        "?redirect_uri=https://evil.example",
+        "?client_id=other",
+    ],
+    ids=[
+        "negative-max-age",
+        "text-max-age",
+        "acr-markup",
+        "prompt-other",
+        "redirect",
+        "client",
+    ],
+)
+def test_login_drops_unsafe_or_unknown_parameters(app_with_routes, query):
+    name = query[1:].split("=")[0]
+    with TestClient(app_with_routes) as client:
+        params = _login_query(client, query)
+    fixed = {
+        "redirect_uri": "http://localhost:8000/auth/callback",
+        "client_id": "test-app",
+    }
+    assert params.get(name) == fixed.get(name)
