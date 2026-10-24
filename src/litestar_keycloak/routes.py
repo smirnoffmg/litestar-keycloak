@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import logging
 import re
 import secrets
 import urllib.parse
@@ -30,6 +31,8 @@ from litestar.exceptions import NotAuthorizedException
 from litestar.response import Redirect
 
 from litestar_keycloak.auth import SESSION_ACCESS_TOKEN_KEY, SESSION_REFRESH_TOKEN_KEY
+from litestar_keycloak.exceptions import AuthenticationError
+from litestar_keycloak.logout import record_logout
 
 if TYPE_CHECKING:
     from litestar.connection import Request
@@ -37,6 +40,11 @@ if TYPE_CHECKING:
     from litestar_keycloak.config import KeycloakConfig
     from litestar_keycloak.http_client import KeycloakHttpClient
     from litestar_keycloak.token import TokenVerifier
+
+logger = logging.getLogger(__name__)
+
+#: OIDC Back-Channel Logout 1.0 §2.8: responses must not be cached.
+_NO_STORE = {"Cache-Control": "no-store"}
 
 #: Name of the short-lived HttpOnly cookie holding the OAuth ``state`` value.
 STATE_COOKIE_NAME = "kc_oauth_state"
@@ -209,7 +217,41 @@ def build_auth_controller(
                 return Response(content={"status": "refreshed"})
             return Response(content=token_data)
 
+        if config.backchannel_logout:
+
+            @post("/backchannel-logout", status_code=200)
+            async def backchannel_logout(
+                self, request: Request[Any, Any, Any]
+            ) -> Response[dict[str, str] | None]:
+                """Receive Keycloak's logout token and end that session here too.
+
+                Called server-to-server by Keycloak, so it carries no bearer
+                token; the signed logout token is the authentication.
+                """
+                form = await request.form()
+                logout_token = form.get("logout_token")
+                if not logout_token:
+                    return _backchannel_error()
+                try:
+                    claims = await verifier.verify_logout_token(str(logout_token))
+                except AuthenticationError as exc:
+                    logger.info("Rejected back-channel logout: %s", exc)
+                    return _backchannel_error()
+                await record_logout(request.app.stores.get(config.logout_store), claims)
+                logger.info(
+                    "Back-channel logout: sid=%s sub=%s",
+                    claims.get("sid"),
+                    claims.get("sub"),
+                )
+                return Response(content=None, status_code=200, headers=_NO_STORE)
+
     return AuthController
+
+
+def _backchannel_error() -> Response[dict[str, str] | None]:
+    return Response(
+        content={"error": "invalid_request"}, status_code=400, headers=_NO_STORE
+    )
 
 
 # ---------------------------------------------------------------------------

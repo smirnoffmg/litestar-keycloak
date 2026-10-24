@@ -132,6 +132,22 @@ class KeycloakConfig:
     for confidential ones.  Keycloak can enforce it per client (Advanced →
     "Proof Key for Code Exchange Code Challenge Method")."""
 
+    session_auto_refresh: bool = False
+    """In ``"redirect"`` mode, renew an expired access token from the session
+    with its refresh token instead of answering 401, and write the new tokens
+    back to the session.  A refresh Keycloak rejects (session ended, refresh
+    token expired) clears the session's tokens and answers 401."""
+
+    backchannel_logout: bool = False
+    """Mount ``POST {auth_prefix}/backchannel-logout`` for Keycloak's OIDC
+    back-channel logout, and refuse tokens from sessions it reports ended.  Set
+    the client's *Backchannel logout URL* in Keycloak to this endpoint."""
+
+    logout_store: str = "keycloak_logout"
+    """Name of the Litestar store recording back-channel logouts.  The default
+    is an in-memory store per process; register a shared store (e.g. Redis)
+    under this name when the app runs as several instances."""
+
     validate_id_token: bool = False
     """Send an OIDC ``nonce`` on login and, in the callback, require the
     returned ID token to be valid for this client and carry that nonce.
@@ -256,6 +272,8 @@ class KeycloakConfig:
             f"{self.auth_prefix}/logout",
             f"{self.auth_prefix}/refresh",
         }
+        if self.backchannel_logout:
+            auth_paths.add(f"{self.auth_prefix}/backchannel-logout")
         return self.excluded_paths | auth_paths
 
     @property
@@ -286,5 +304,11 @@ class KeycloakConfig:
             raise ValueError("token_introspection requires client_secret")
         if self.introspection_cache_ttl < 0:
             raise ValueError("introspection_cache_ttl must be non-negative")
+        if self.session_auto_refresh and self.callback_response_mode != "redirect":
+            raise ValueError(
+                'session_auto_refresh requires callback_response_mode="redirect"'
+            )
+        if self.backchannel_logout and not self.include_routes:
+            raise ValueError("backchannel_logout requires include_routes=True")
         if self.validate_id_token and "openid" not in self.scopes:
             raise ValueError('validate_id_token requires "openid" in scopes')

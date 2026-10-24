@@ -11,13 +11,22 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+import aiohttp
 from litestar.middleware import AbstractAuthenticationMiddleware, AuthenticationResult
 
 from litestar_keycloak.config import TokenLocation
-from litestar_keycloak.exceptions import MissingTokenError
+from litestar_keycloak.exceptions import (
+    MissingTokenError,
+    SessionRefreshError,
+    TokenExpiredError,
+    TokenInactiveError,
+)
+from litestar_keycloak.logout import is_logged_out
 from litestar_keycloak.models import KeycloakUser
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
     from litestar.connection import ASGIConnection
 
     from litestar_keycloak.config import KeycloakConfig
@@ -39,12 +48,14 @@ SESSION_REFRESH_TOKEN_KEY = "keycloak_refresh_token"
 def create_auth_middleware(
     config: KeycloakConfig,
     verifier: TokenVerifier,
+    refresh: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
 ) -> type[AbstractAuthenticationMiddleware]:
     """Factory that returns a configured authentication middleware class.
 
     Using a factory rather than a standalone class avoids the need for
-    module-level mutable state — ``config`` and ``verifier`` are captured
-    in the closure and available to every middleware instance.
+    module-level mutable state — ``config``, ``verifier`` and the optional
+    *refresh* grant (for ``session_auto_refresh``) are captured in the closure
+    and available to every middleware instance.
     """
 
     class KeycloakAuthMiddleware(AbstractAuthenticationMiddleware):
@@ -74,7 +85,24 @@ def create_auth_middleware(
                 if _allows_anonymous(connection, config):
                     return AuthenticationResult(user=None, auth=None)
                 raise
-            payload = await verifier.verify(raw_token)
+            try:
+                payload = await verifier.verify(raw_token)
+            except TokenExpiredError:
+                session = _session_dict(connection)
+                if (
+                    refresh is None
+                    or session is None
+                    or (raw_token != session.get(SESSION_ACCESS_TOKEN_KEY))
+                ):
+                    raise
+                raw_token = await _refresh_session(session, refresh)
+                payload = await verifier.verify(raw_token)
+
+            if config.backchannel_logout and await is_logged_out(
+                connection.app.stores.get(config.logout_store), payload
+            ):
+                raise TokenInactiveError("Session was logged out by Keycloak")
+
             user = KeycloakUser.from_token(payload, groups_claim=config.groups_claim)
 
             connection.state[TOKEN_STATE_KEY] = payload
@@ -83,6 +111,50 @@ def create_auth_middleware(
             return AuthenticationResult(user=user, auth=payload)
 
     return KeycloakAuthMiddleware
+
+
+async def _refresh_session(
+    session: dict[str, Any],
+    refresh: Callable[[str], Awaitable[dict[str, Any]]],
+) -> str:
+    """Renew the session's tokens; return the new access token.
+
+    A refresh Keycloak *rejects* (400/401: session ended, refresh token
+    expired or revoked) is a 401; any other failure is Keycloak's, a 502.
+
+    The session is only written on success.  An exception raised here is
+    rendered outside the session middleware, so clearing the tokens on failure
+    would never be persisted; the next login overwrites them instead.
+    """
+    refresh_token = session.get(SESSION_REFRESH_TOKEN_KEY)
+    if not refresh_token:
+        raise TokenExpiredError("Session token expired and cannot be refreshed")
+    try:
+        token_data = await refresh(str(refresh_token))
+    except aiohttp.ClientResponseError as exc:
+        if exc.status in (400, 401):
+            raise TokenExpiredError("Keycloak rejected the session refresh") from exc
+        raise SessionRefreshError(f"Session refresh failed: {exc}") from exc
+    except (aiohttp.ClientError, OSError) as exc:
+        raise SessionRefreshError(f"Session refresh failed: {exc}") from exc
+
+    access_token = str(token_data["access_token"])
+    session[SESSION_ACCESS_TOKEN_KEY] = access_token
+    session[SESSION_REFRESH_TOKEN_KEY] = token_data.get("refresh_token", refresh_token)
+    return access_token
+
+
+def _session_dict(
+    connection: ASGIConnection[Any, Any, Any, Any],
+) -> dict[str, Any] | None:
+    """The session dict, or ``None`` without session middleware.
+
+    Read from ``scope`` (``connection.session`` raises when no session
+    middleware is installed); the session middleware persists changes made to
+    this dict when the response is sent.
+    """
+    session = connection.scope.get("session")
+    return session if isinstance(session, dict) else None
 
 
 def _allows_anonymous(
@@ -126,8 +198,8 @@ def _extract_from_session(
     when no session middleware is installed) so the fallback is a no-op for
     header/cookie-only apps.
     """
-    session = connection.scope.get("session")
-    if isinstance(session, dict):
+    session = _session_dict(connection)
+    if session is not None:
         token = session.get(SESSION_ACCESS_TOKEN_KEY)
         if token:
             return str(token)

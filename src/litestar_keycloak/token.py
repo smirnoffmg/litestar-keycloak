@@ -44,6 +44,9 @@ MIN_FORCED_REFRESH_INTERVAL = 10
 
 _RSA_SIG_ALGS = frozenset({"RS256", "RS384", "RS512"})
 
+#: ``events`` member that marks a back-channel logout token.
+BACKCHANNEL_LOGOUT_EVENT = "http://schemas.openid.net/event/backchannel-logout"
+
 #: JWK ``kty`` that verifies each JWS ``alg`` family, keyed by the alg's first
 #: two letters (``RS``/``PS`` RSA, ``ES`` ECDSA, ``Ed`` EdDSA).
 _KTY_BY_ALG_FAMILY = {"RS": "RSA", "PS": "RSA", "ES": "EC", "Ed": "OKP"}
@@ -270,6 +273,46 @@ class TokenVerifier:
         actual = str(claims.get("nonce", "")).encode()
         if not nonce or not hmac.compare_digest(actual, expected):
             raise TokenDecodeError("ID token nonce does not match the login")
+        return claims
+
+    async def verify_logout_token(self, raw_token: str) -> dict[str, Any]:
+        """Validate a back-channel logout token (OIDC Back-Channel Logout 2.6).
+
+        Besides signature, ``iss``, ``aud`` (this client) and ``iat``, the token
+        must carry the back-channel logout event and a ``sid`` or ``sub``, and
+        must not carry a ``nonce`` — that and the ``logout+jwt`` header type
+        keep an ID or access token from being replayed as a logout.
+        """
+        try:
+            header_typ = jwt.get_unverified_header(raw_token).get("typ")
+        except jwt.exceptions.DecodeError as exc:
+            raise TokenDecodeError(f"Cannot read JWT header: {exc}") from exc
+        if header_typ is not None and str(header_typ).lower() != "logout+jwt":
+            raise TokenDecodeError(f"Not a logout token (typ {header_typ!r})")
+
+        kid, alg = self._read_header(raw_token)
+        signing_key = await self._jwks_cache.get_key(kid)
+        _check_alg_matches_key(alg, kid, signing_key)
+        claims = self._decode(raw_token, signing_key)
+
+        if claims.get("iss", "") != self._config.issuer:
+            raise InvalidIssuerError(
+                expected=self._config.issuer, got=claims.get("iss", "")
+            )
+        aud = claims.get("aud", "")
+        if self._config.client_id not in (aud if isinstance(aud, list) else [aud]):
+            raise InvalidAudienceError(expected=self._config.client_id, got=aud)
+        events = claims.get("events")
+        if not isinstance(events, dict) or not isinstance(
+            events.get(BACKCHANNEL_LOGOUT_EVENT), dict
+        ):
+            raise TokenDecodeError("Logout token lacks the back-channel logout event")
+        if "nonce" in claims:
+            raise TokenDecodeError("Logout token must not contain a nonce")
+        if "iat" not in claims:
+            raise TokenDecodeError("Logout token lacks iat")
+        if not claims.get("sid") and not claims.get("sub"):
+            raise TokenDecodeError("Logout token names neither sid nor sub")
         return claims
 
     # -- internals ---------------------------------------------------------

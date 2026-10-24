@@ -5,7 +5,6 @@ leaves the shared realm untouched for the other tests.
 """
 
 import dataclasses
-import uuid
 
 import httpx
 import pytest
@@ -20,29 +19,6 @@ pytestmark = pytest.mark.integration
 @get("/me")
 async def me(current_user: CurrentUser) -> dict:
     return {"username": current_user.preferred_username}
-
-
-@pytest.fixture
-def probe_user(admin_api) -> str:
-    """A throwaway user; returns its ID."""
-    username = f"probe-{uuid.uuid4().hex[:8]}"
-    resp = admin_api.post(
-        "/users",
-        json={
-            "username": username,
-            "enabled": True,
-            "firstName": "Probe",
-            "lastName": "User",
-            "email": f"{username}@test.local",
-            "emailVerified": True,
-            "credentials": [{"type": "password", "value": "pw", "temporary": False}],
-        },
-    )
-    assert resp.status_code == 201, resp.text
-    [user] = admin_api.get(
-        "/users", params={"username": username, "exact": "true"}
-    ).json()
-    return user["id"]
 
 
 def _token_for(keycloak_container, admin_api, user_id: str) -> str:

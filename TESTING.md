@@ -11,7 +11,7 @@ Two layers, one principle: **unit tests prove the logic, integration tests prove
 | Unit        | `pytest` (default)      | unmarked                   | None — fake JWTs, in-memory JWKS    | ~2s     |
 | Integration | `pytest -m integration` | `@pytest.mark.integration` | Keycloak container (testcontainers) | ~60s+   |
 
-Current state: **312 tests across 24 files** — 281 unit, 31 integration — at **99% coverage**.
+Current state: **341 tests across 27 files** — 308 unit, 33 integration — at **99% coverage**.
 
 Integration tests are **excluded by default** (`addopts = "-m 'not integration'"`), so a bare
 `pytest` is always the fast path. `asyncio_mode = "auto"` means `async def test_*` needs no
@@ -26,13 +26,14 @@ tests/
 ├── test_routes.py              # OIDC routes with mocked Keycloak calls
 ├── test_testing_api.py         # the public helpers in conftest.py (nothing else uses them)
 ├── test_optional_auth.py       # optional_auth routes, end to end with MockKeycloakPlugin
+├── test_session_lifecycle.py   # session auto-refresh and back-channel logout, end to end
 ├── fixtures/realm-export.json  # realm imported by the container
 ├── unit/
 │   ├── conftest.py             # RSA keypair, JWKS double, make_token factory
-│   └── test_{auth,config,dependencies,exceptions,guards,http_client,introspection,jwks_cache,models,token}.py
+│   └── test_{auth,config,dependencies,exceptions,guards,http_client,introspection,jwks_cache,logout,models,token}.py
 └── integration/
-    ├── conftest.py             # Keycloak container, config, token, admin_api, browser_login fixtures
-    └── test_{guards_integration,identity,jwks_refresh,key_types,login_hardening,oidc_flow,revocation,routes_integration,scenarios,token_validation}.py
+    ├── conftest.py             # Keycloak container, config, token, admin_api, browser_login, probe_user fixtures
+    └── test_{guards_integration,identity,jwks_refresh,key_types,login_hardening,oidc_flow,revocation,routes_integration,scenarios,session_lifecycle,token_validation}.py
 ```
 
 `tests/unit/` and `tests/integration/` have no `__init__.py`, so **cross-file imports between
@@ -58,7 +59,7 @@ Measured with `uv run pytest --cov=litestar_keycloak --cov-report=term-missing` 
 | `plugin.py`       | 13    | 100%     | |
 | `routes.py`       | 41    | 100%     | |
 | `token.py`        | 52    | 100%     | |
-| **Total**         | 281   | **99%**  | |
+| **Total**         | 308   | **99%**  | |
 
 There is no `fail_under` threshold; `--cov` is not in `addopts`, so coverage runs only when
 asked for.

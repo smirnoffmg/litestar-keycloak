@@ -31,6 +31,14 @@ Two opt-in settings harden the code flow:
 
 Both cookies follow `cookie_secure` / `cookie_samesite` like the `state` cookie and are cleared by the callback. If Keycloak redirects back with `?error=` (denied consent, refused request), the callback answers `401` naming the error code.
 
+## Session lifecycle
+
+**Auto-refresh (`session_auto_refresh=True`, redirect mode).** Keycloak access tokens live minutes, a server-rendered session hours. With this flag, a request whose *session* access token has expired is not answered `401`: the middleware runs a refresh-token grant, writes the new tokens back to the session and continues. If Keycloak rejects the refresh (the SSO session ended, the refresh token expired or was revoked), the request gets `401` — and so does every following one until the user signs in again, which overwrites the session's tokens. A token sent in the `Authorization` header is never refreshed; that is the caller's job. With Keycloak's *Revoke Refresh Token* enabled, two concurrent requests refreshing the same session race, and the loser gets `401`.
+
+**Back-channel logout (`backchannel_logout=True`).** When a user logs out elsewhere, or an admin ends their session, Keycloak POSTs a signed *logout token* to each client's *Backchannel logout URL* (client settings → *Logout settings*). Point it at `{your app}/auth/backchannel-logout` and keep *Backchannel logout session required* on, so the token names the session (`sid`). The endpoint verifies the token (signature, `iss`, `aud`, the logout event, no `nonce`) and records the session as ended in the `logout_store`; from then on every token from that session — session-stored or Bearer — gets `401`. A logout token naming only `sub` ends all of that user's sessions issued before it. The endpoint answers `400` to anything that is not a valid logout token.
+
+Keycloak must be able to reach the endpoint, and it carries no bearer token (the plugin excludes it from authentication). If you enable Litestar's CSRF middleware, exclude this path from it too. Records are kept for 24 hours in an in-memory store by default; with several app instances, register a shared store (e.g. Redis) as `logout_store`, or a logout reaches only the instance Keycloak happened to call.
+
 ## Redirect mode: session middleware required
 
 `"redirect"` mode stores tokens in the server-side session, and the auth middleware reads the access token from the session on subsequent requests. You must add Litestar session middleware; the plugin's auth middleware is registered so it runs **after** it.

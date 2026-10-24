@@ -339,3 +339,36 @@ def test_introspection_url_is_derived_from_realm():
         config.introspection_url
         == "https://kc/realms/r/protocol/openid-connect/token/introspect"
     )
+
+
+def _routes(**kwargs) -> KeycloakConfig:
+    return KeycloakConfig(
+        server_url="https://kc",
+        realm="r",
+        client_id="c",
+        include_routes=True,
+        redirect_uri="https://app/auth/callback",
+        **kwargs,
+    )
+
+
+def test_session_auto_refresh_requires_redirect_mode():
+    with pytest.raises(ValueError, match="session_auto_refresh"):
+        _routes(session_auto_refresh=True)
+    _routes(session_auto_refresh=True, callback_response_mode="redirect")
+
+
+def test_backchannel_logout_requires_routes():
+    with pytest.raises(ValueError, match="backchannel_logout"):
+        KeycloakConfig(
+            server_url="https://kc", realm="r", client_id="c", backchannel_logout=True
+        )
+
+
+def test_backchannel_logout_path_skips_auth():
+    """Keycloak calls it without a bearer token."""
+    assert (
+        "/auth/backchannel-logout"
+        in _routes(backchannel_logout=True).effective_excluded_paths
+    )
+    assert "/auth/backchannel-logout" not in _routes().effective_excluded_paths

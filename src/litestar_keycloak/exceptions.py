@@ -156,6 +156,10 @@ class JWKSFetchError(KeycloakBackendError):
     """Failed to retrieve the JSON Web Key Set from Keycloak."""
 
 
+class SessionRefreshError(KeycloakBackendError):
+    """Refreshing the session's tokens failed for a reason other than rejection."""
+
+
 class IntrospectionError(KeycloakBackendError):
     """Keycloak's introspection endpoint could not be reached or refused us."""
 

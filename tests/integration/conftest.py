@@ -15,6 +15,7 @@ import logging
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -38,8 +39,12 @@ def keycloak_container():
     logger.info(
         "Starting Keycloak container (image: quay.io/keycloak/keycloak:26.0)..."
     )
-    kc = KeycloakContainer("quay.io/keycloak/keycloak:26.0").with_realm_import_file(
-        str(REALM_EXPORT)
+    kc = (
+        KeycloakContainer("quay.io/keycloak/keycloak:26.0")
+        .with_realm_import_file(str(REALM_EXPORT))
+        # Lets Keycloak call back into the test process (back-channel logout);
+        # Docker Desktop has this name already, Linux needs the mapping.
+        .with_kwargs(extra_hosts={"host.docker.internal": "host-gateway"})
     )
     kc.start()
     base_url = kc.get_url()
@@ -192,3 +197,26 @@ def browser_login():
             return resp.headers["location"]
 
     return _login
+
+
+@pytest.fixture
+def probe_user(admin_api) -> str:
+    """A throwaway user (password ``pw``) that a test may log out or disable."""
+    username = f"probe-{uuid.uuid4().hex[:8]}"
+    resp = admin_api.post(
+        "/users",
+        json={
+            "username": username,
+            "enabled": True,
+            "firstName": "Probe",
+            "lastName": "User",
+            "email": f"{username}@test.local",
+            "emailVerified": True,
+            "credentials": [{"type": "password", "value": "pw", "temporary": False}],
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    [user] = admin_api.get(
+        "/users", params={"username": username, "exact": "true"}
+    ).json()
+    return user["id"]

@@ -22,7 +22,7 @@ from litestar_keycloak.dependencies import build_dependencies
 from litestar_keycloak.exceptions import JWKSFetchError, exception_handlers
 from litestar_keycloak.http_client import KeycloakHttpClient
 from litestar_keycloak.introspection import TokenIntrospector
-from litestar_keycloak.routes import build_auth_controller
+from litestar_keycloak.routes import _refresh_token, build_auth_controller
 from litestar_keycloak.token import JWKSCache, TokenVerifier
 
 if TYPE_CHECKING:
@@ -85,7 +85,13 @@ class KeycloakPlugin(InitPluginProtocol):
         # Appended (not inserted at 0) so it runs *after* any app-level session
         # middleware — required for callback_response_mode="redirect", where the
         # token is read from the session the session middleware populates.
-        middleware_cls = create_auth_middleware(self._config, self._verifier)
+        middleware_cls = create_auth_middleware(
+            self._config,
+            self._verifier,
+            refresh=self._refresh_session_tokens
+            if self._config.session_auto_refresh
+            else None,
+        )
         app_config.middleware.append(
             DefineMiddleware(
                 middleware_cls,
@@ -119,6 +125,9 @@ class KeycloakPlugin(InitPluginProtocol):
         app_config.on_shutdown.append(self._on_shutdown)
 
         return app_config
+
+    async def _refresh_session_tokens(self, refresh_token: str) -> dict[str, Any]:
+        return await _refresh_token(self._config, refresh_token, http=self._http)
 
     async def _on_startup(self) -> None:
         """Warm the JWKS cache so the first request doesn't pay fetch latency.

@@ -498,3 +498,58 @@ async def test_verify_id_token_non_ascii_nonce_is_rejected_not_crashed(
 ):
     with pytest.raises(TokenDecodeError):
         await token_verifier.verify_id_token(_id_token(rsa_keypair), nonce="я")
+
+
+# --- back-channel logout token (OIDC Back-Channel Logout 1.0, 2.6) ---
+
+_BACKCHANNEL_EVENT = "http://schemas.openid.net/event/backchannel-logout"
+
+
+def _logout_token(rsa_keypair, typ_header="logout+jwt", **overrides) -> str:
+    private_key, _ = rsa_keypair
+    claims = _claims(typ="Logout", sid="s-1", events={_BACKCHANNEL_EVENT: {}})
+    claims.update(overrides)
+    claims = {k: v for k, v in claims.items() if v is not None}
+    headers = {"kid": "test-kid"}
+    if typ_header is not None:
+        headers["typ"] = typ_header
+    return jwt.encode(claims, private_key, algorithm="RS256", headers=headers)
+
+
+async def test_verify_logout_token_returns_claims(token_verifier, rsa_keypair):
+    claims = await token_verifier.verify_logout_token(_logout_token(rsa_keypair))
+    assert (claims["sid"], claims["sub"]) == ("s-1", "user-1")
+
+
+async def test_verify_logout_token_accepts_sub_only(token_verifier, rsa_keypair):
+    token = _logout_token(rsa_keypair, sid=None)
+    assert (await token_verifier.verify_logout_token(token))["sub"] == "user-1"
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "error"),
+    [
+        ({"events": None}, TokenDecodeError),
+        ({"events": {"other": {}}}, TokenDecodeError),
+        ({"nonce": "n"}, TokenDecodeError),
+        ({"sid": None, "sub": None}, TokenDecodeError),
+        ({"iat": None}, TokenDecodeError),
+        ({"typ_header": "JWT"}, TokenDecodeError),
+        ({"aud": "other-app"}, InvalidAudienceError),
+        ({"iss": "https://evil/realms/test-realm"}, InvalidIssuerError),
+    ],
+    ids=[
+        "no-events",
+        "wrong-event",
+        "nonce",
+        "no-subject",
+        "no-iat",
+        "typ",
+        "aud",
+        "iss",
+    ],
+)
+async def test_verify_logout_token_rejects(token_verifier, rsa_keypair, kwargs, error):
+    """An access or ID token, or a token for another client, cannot log anyone out."""
+    with pytest.raises(error):
+        await token_verifier.verify_logout_token(_logout_token(rsa_keypair, **kwargs))
