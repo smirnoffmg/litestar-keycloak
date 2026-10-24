@@ -80,6 +80,21 @@ class KeycloakConfig:
     scopes: tuple[str, ...] = ("openid",)
     """Scopes requested during the authorization code flow."""
 
+    # -- revocation --------------------------------------------------------
+    token_introspection: bool = False
+    """Ask Keycloak (RFC 7662) whether each locally valid token is still active.
+
+    A JWT stays valid until ``exp`` even after its session is logged out or
+    its user disabled; introspection catches that on the next request, at the
+    cost of one call to Keycloak per request (see
+    ``introspection_cache_ttl``).  Requires ``client_secret``: Keycloak only
+    answers authenticated confidential clients."""
+
+    introspection_cache_ttl: int = 0
+    """Seconds to reuse a positive introspection result for the same token.
+    ``0`` (default) introspects every request, so a revocation takes effect
+    immediately; a positive value trades that delay for fewer calls."""
+
     # -- JWKS --------------------------------------------------------------
     jwks_cache_ttl: int = 3600
     """How long (seconds) to cache the JWKS before re-fetching."""
@@ -205,6 +220,11 @@ class KeycloakConfig:
         return f"{self.realm_url}/protocol/openid-connect/logout"
 
     @property
+    def introspection_url(self) -> str:
+        """Token introspection endpoint (RFC 7662)."""
+        return f"{self.realm_url}/protocol/openid-connect/token/introspect"
+
+    @property
     def effective_audience(self) -> str:
         """Primary audience for JWT validation (explicit or client_id)."""
         return self.audience if self.audience is not None else self.client_id
@@ -251,3 +271,7 @@ class KeycloakConfig:
             raise ValueError("http_timeout must be positive")
         if self.leeway < 0:
             raise ValueError("leeway must be non-negative")
+        if self.token_introspection and self.client_secret is None:
+            raise ValueError("token_introspection requires client_secret")
+        if self.introspection_cache_ttl < 0:
+            raise ValueError("introspection_cache_ttl must be non-negative")

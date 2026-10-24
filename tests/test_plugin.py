@@ -168,3 +168,16 @@ async def test_on_shutdown_closes_http_client(keycloak_config):
     plugin._http.close = close_mock
     await app_config.on_shutdown[0]()
     close_mock.assert_called_once()
+
+
+def test_plugin_wires_introspection_only_when_enabled(keycloak_config):
+    """Introspection is opt-in; the default verifier makes no extra call."""
+    assert KeycloakPlugin(keycloak_config)._verifier._introspector is None
+    enabled = KeycloakConfig(
+        server_url="http://localhost:8080",
+        realm="test-realm",
+        client_id="test-app",
+        client_secret="s",
+        token_introspection=True,
+    )
+    assert KeycloakPlugin(enabled)._verifier._introspector is not None

@@ -12,6 +12,7 @@ from litestar_keycloak.exceptions import (
     InsufficientGroupError,
     InsufficientRoleError,
     InsufficientScopeError,
+    IntrospectionError,
     InvalidAudienceError,
     InvalidIssuerError,
     JWKSFetchError,
@@ -20,6 +21,7 @@ from litestar_keycloak.exceptions import (
     MissingTokenError,
     TokenDecodeError,
     TokenExpiredError,
+    TokenInactiveError,
     exception_handlers,
 )
 
@@ -318,3 +320,20 @@ def test_step_up_denial_is_logged_as_warning(caplog):
     assert record.levelno == logging.WARNING
     assert "/payments" in record.getMessage()
     assert "user-42" in record.getMessage()
+
+
+def test_inactive_token_is_a_generic_401():
+    """A revoked token is just an invalid token to the caller."""
+    response = exception_handlers[AuthenticationError](
+        _mock_request(), TokenInactiveError("Token is not active")
+    )
+    assert response.status_code == 401
+    assert response.content == {"error": "Invalid token"}
+    assert response.headers["WWW-Authenticate"] == 'Bearer error="invalid_token"'
+
+
+def test_introspection_error_is_502():
+    response = exception_handlers[KeycloakBackendError](
+        _mock_request(), IntrospectionError("down")
+    )
+    assert response.status_code == 502

@@ -52,6 +52,17 @@ For the redirect-mode flow (session middleware, endpoint behavior) see the [OIDC
 | `leeway`              | `0`           | Seconds of clock skew tolerated when checking `exp`, `nbf` and `iat`. Set a few seconds if the app and Keycloak clocks may drift. |
 | `expected_token_type` | `"Bearer"`    | Required payload `typ` claim. The default rejects Keycloak ID and Refresh tokens presented as access tokens. Set to `None` to disable the check (e.g. providers that omit `typ`). |
 
+## Revocation (token introspection)
+
+A JWT is checked locally against the realm's keys, so it stays valid until `exp` even after its session is logged out or its user disabled. Enable introspection to ask Keycloak about every locally valid token:
+
+| Field                     | Default | Description |
+| ------------------------- | ------- | ----------- |
+| `token_introspection`     | `False` | Call Keycloak's introspection endpoint (RFC 7662) for each request whose token passed local validation. An inactive token gets `401`; if Keycloak cannot be reached or rejects the client's credentials, the request gets `502` — it is never let through. Requires `client_secret`. |
+| `introspection_cache_ttl` | `0`     | Seconds to reuse a positive answer for the same token. `0` asks on every request, so a logout or a disabled user takes effect on the very next request; a positive value cuts the calls to Keycloak and lets a revoked token through for up to that many seconds. |
+
+Verified against Keycloak 26: an admin-ended session and a disabled user both introspect as inactive at once. Without introspection, the only bound on how long a revoked token keeps working is the realm's access-token lifespan — keep it short (minutes) either way.
+
 ## JWKS and HTTP
 
 | Field            | Default | Description                                                           |
@@ -111,6 +122,7 @@ The plugin derives all Keycloak URLs from `server_url` and `realm`; you never bu
 | `authorization_url` | `{realm_url}/protocol/openid-connect/auth`                |
 | `token_url`         | `{realm_url}/protocol/openid-connect/token`               |
 | `logout_url`        | `{realm_url}/protocol/openid-connect/logout`              |
+| `introspection_url` | `{realm_url}/protocol/openid-connect/token/introspect`     |
 
 Endpoint URLs are built from the template above — the plugin does not fetch the OIDC discovery document.
 
@@ -120,6 +132,8 @@ Endpoint URLs are built from the template above — the plugin does not fetch th
 - `jwks_cache_ttl < 0` -> `ValueError`.
 - `http_timeout <= 0` -> `ValueError`.
 - `leeway < 0` -> `ValueError`.
+- `token_introspection=True` and `client_secret=None` -> `ValueError`.
+- `introspection_cache_ttl < 0` -> `ValueError`.
 
 ## Example
 

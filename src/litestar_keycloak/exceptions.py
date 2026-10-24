@@ -81,6 +81,10 @@ class InvalidTokenTypeError(AuthenticationError):
         super().__init__(f"Expected token type {expected!r}, got {got!r}")
 
 
+class TokenInactiveError(AuthenticationError):
+    """Keycloak reports the token inactive (session ended, user disabled, ...)."""
+
+
 class InsufficientAuthenticationError(AuthenticationError):
     """The login is too weak or too old for this route (RFC 9470 step-up).
 
@@ -150,6 +154,10 @@ class KeycloakBackendError(KeycloakError):
 
 class JWKSFetchError(KeycloakBackendError):
     """Failed to retrieve the JSON Web Key Set from Keycloak."""
+
+
+class IntrospectionError(KeycloakBackendError):
+    """Keycloak's introspection endpoint could not be reached or refused us."""
 
 
 # ---------------------------------------------------------------------------

@@ -21,6 +21,7 @@ from litestar_keycloak.auth import create_auth_middleware
 from litestar_keycloak.dependencies import build_dependencies
 from litestar_keycloak.exceptions import JWKSFetchError, exception_handlers
 from litestar_keycloak.http_client import KeycloakHttpClient
+from litestar_keycloak.introspection import TokenIntrospector
 from litestar_keycloak.routes import build_auth_controller
 from litestar_keycloak.token import JWKSCache, TokenVerifier
 
@@ -62,7 +63,12 @@ class KeycloakPlugin(InitPluginProtocol):
             ttl=config.jwks_cache_ttl,
             http=self._http,
         )
-        self._verifier = TokenVerifier(config, self._jwks_cache)
+        introspector = (
+            TokenIntrospector(config, self._http)
+            if config.token_introspection
+            else None
+        )
+        self._verifier = TokenVerifier(config, self._jwks_cache, introspector)
 
     def on_app_init(self, app_config: AppConfig) -> AppConfig:
         """Hook called by Litestar during application startup.

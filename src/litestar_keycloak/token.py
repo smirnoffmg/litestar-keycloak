@@ -32,6 +32,7 @@ from litestar_keycloak.models import TokenPayload
 if TYPE_CHECKING:
     from litestar_keycloak.config import KeycloakConfig
     from litestar_keycloak.http_client import KeycloakHttpClient
+    from litestar_keycloak.introspection import TokenIntrospector
 
 logger = logging.getLogger(__name__)
 
@@ -202,9 +203,15 @@ class TokenVerifier:
     the immutable ``KeycloakConfig``.
     """
 
-    def __init__(self, config: KeycloakConfig, jwks_cache: JWKSCache) -> None:
+    def __init__(
+        self,
+        config: KeycloakConfig,
+        jwks_cache: JWKSCache,
+        introspector: TokenIntrospector | None = None,
+    ) -> None:
         self._config = config
         self._jwks_cache = jwks_cache
+        self._introspector = introspector
 
     async def verify(self, raw_token: str) -> TokenPayload:
         """Decode and validate *raw_token*, returning a ``TokenPayload``.
@@ -215,6 +222,8 @@ class TokenVerifier:
             InvalidIssuerError: ``iss`` does not match the realm URL.
             InvalidAudienceError: ``aud`` does not include the client ID.
             JWKSFetchError: Signing key could not be retrieved.
+            TokenInactiveError: Introspection reports the token inactive.
+            IntrospectionError: Introspection is enabled but failed.
         """
         kid, alg = self._read_header(raw_token)
         signing_key = await self._jwks_cache.get_key(kid)
@@ -222,6 +231,8 @@ class TokenVerifier:
 
         claims = self._decode(raw_token, signing_key)
         self._validate_claims(claims)
+        if self._introspector is not None:
+            await self._introspector.ensure_active(raw_token)
 
         return TokenPayload.from_claims(claims)
 

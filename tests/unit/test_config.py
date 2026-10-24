@@ -312,3 +312,30 @@ def test_exclude_auth_patterns_includes_auth_routes_when_include_routes():
     assert patterns is not None
     assert "^/auth/login$" in patterns
     assert "^/auth/callback$" in patterns
+
+
+def test_token_introspection_requires_client_secret():
+    """Keycloak authenticates the introspecting client, so a secret is needed."""
+    with pytest.raises(ValueError, match="client_secret"):
+        KeycloakConfig(
+            server_url="https://kc", realm="r", client_id="c", token_introspection=True
+        )
+
+
+def test_negative_introspection_cache_ttl_raises_value_error():
+    with pytest.raises(ValueError, match="introspection_cache_ttl"):
+        KeycloakConfig(
+            server_url="https://kc",
+            realm="r",
+            client_id="c",
+            client_secret="s",
+            introspection_cache_ttl=-1,
+        )
+
+
+def test_introspection_url_is_derived_from_realm():
+    config = KeycloakConfig(server_url="https://kc/", realm="r", client_id="c")
+    assert (
+        config.introspection_url
+        == "https://kc/realms/r/protocol/openid-connect/token/introspect"
+    )

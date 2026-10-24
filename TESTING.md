@@ -11,7 +11,7 @@ Two layers, one principle: **unit tests prove the logic, integration tests prove
 | Unit        | `pytest` (default)      | unmarked                   | None — fake JWTs, in-memory JWKS    | ~2s     |
 | Integration | `pytest -m integration` | `@pytest.mark.integration` | Keycloak container (testcontainers) | ~60s+   |
 
-Current state: **264 tests across 21 files** — 239 unit, 25 integration — at **99% coverage**.
+Current state: **286 tests across 23 files** — 257 unit, 29 integration — at **99% coverage**.
 
 Integration tests are **excluded by default** (`addopts = "-m 'not integration'"`), so a bare
 `pytest` is always the fast path. `asyncio_mode = "auto"` means `async def test_*` needs no
@@ -29,10 +29,10 @@ tests/
 ├── fixtures/realm-export.json  # realm imported by the container
 ├── unit/
 │   ├── conftest.py             # RSA keypair, JWKS double, make_token factory
-│   └── test_{auth,config,dependencies,exceptions,guards,http_client,jwks_cache,models,token}.py
+│   └── test_{auth,config,dependencies,exceptions,guards,http_client,introspection,jwks_cache,models,token}.py
 └── integration/
     ├── conftest.py             # Keycloak container, config, token, admin_api, browser_login fixtures
-    └── test_{guards_integration,identity,jwks_refresh,key_types,oidc_flow,routes_integration,scenarios,token_validation}.py
+    └── test_{guards_integration,identity,jwks_refresh,key_types,oidc_flow,revocation,routes_integration,scenarios,token_validation}.py
 ```
 
 `tests/unit/` and `tests/integration/` have no `__init__.py`, so **cross-file imports between
@@ -52,12 +52,13 @@ Measured with `uv run pytest --cov=litestar_keycloak --cov-report=term-missing` 
 | `dependencies.py` | 4     | 75%      | `47-53` — litestar < 2.23 import shim |
 | `exceptions.py`   | 27    | 100%     | |
 | `guards.py`       | 27    | 100%     | |
+| `introspection.py`| 11    | 100%     | |
 | `http_client.py`  | 7     | 97%      | `31->33` — lock double-check branch |
 | `models.py`       | 32    | 100%     | |
 | `plugin.py`       | 13    | 100%     | |
 | `routes.py`       | 28    | 100%     | |
 | `token.py`        | 41    | 100%     | |
-| **Total**         | 239   | **99%**  | |
+| **Total**         | 257   | **99%**  | |
 
 There is no `fail_under` threshold; `--cov` is not in `addopts`, so coverage runs only when
 asked for.
@@ -132,12 +133,14 @@ roles `read`/`write`), `test-shortlived` (secret `shortlived-secret`, `access.to
 
 Deliberate design limits. Do not write tests asserting the opposite — they cannot pass.
 
-**No token revocation checking.** `TokenVerifier.verify` validates entirely offline: JWKS
-signature plus the `typ`, `iss`, `aud`, `exp` claims. There is no introspection call anywhere in
-the package. **An access token remains valid after logout until its `exp`** — the standard
-stateless-JWT tradeoff. Refresh tokens *are* validated server-side by Keycloak, so logout does
-invalidate those; that is what `test_logout_invalidates_refresh_token` covers. Applications
-needing immediate revocation should shorten `access.token.lifespan` or add introspection.
+**Revocation checking is opt-in.** By default `TokenVerifier.verify` validates entirely
+offline: JWKS signature plus the `typ`, `iss`, `aud`, `exp` claims, so **an access token remains
+valid after logout until its `exp`** — the standard stateless-JWT tradeoff. Do not write tests
+expecting a default config to reject a revoked token. Refresh tokens *are* validated
+server-side by Keycloak, so logout does invalidate those (`test_logout_invalidates_refresh_token`).
+With `token_introspection=True` each locally valid token is also introspected;
+`tests/integration/test_revocation.py` covers logout, a disabled user, service tokens and a
+wrong client secret, and asserts the default config still admits the revoked token.
 
 **No OIDC discovery.** Endpoint URLs are derived directly from `server_url` + `realm` in
 `config.py`; `.well-known/openid-configuration` is never fetched. There is no `discovery_url`.

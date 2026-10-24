@@ -2,6 +2,7 @@
 
 import dataclasses
 import time
+from unittest.mock import AsyncMock
 
 import jwt
 import pytest
@@ -412,3 +413,19 @@ async def test_verify_leeway_tolerates_clock_skew(
     verifier = TokenVerifier(config, mock_jwks_cache)
     await verifier.verify(make_token(exp_offset=-5))
     await verifier.verify(make_token(iat=int(time.time()) + 10))
+
+
+async def test_verify_introspects_after_local_validation(
+    keycloak_config, mock_jwks_cache, make_token
+):
+    """Only a token that passes local checks costs an introspection call."""
+    introspector = AsyncMock()
+    verifier = TokenVerifier(keycloak_config, mock_jwks_cache, introspector)
+    token = make_token()
+    await verifier.verify(token)
+    introspector.ensure_active.assert_awaited_once_with(token)
+
+    introspector.reset_mock()
+    with pytest.raises(TokenExpiredError):
+        await verifier.verify(make_token(exp_offset=-60))
+    introspector.ensure_active.assert_not_awaited()
