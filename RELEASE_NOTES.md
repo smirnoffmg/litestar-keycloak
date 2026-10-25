@@ -5,25 +5,26 @@ package, and warns when back-channel logouts cannot reach every instance.
 
 ## Before you upgrade
 
-- **Nothing to change.** Apps with `backchannel_logout=True` and no store registered
-  under `logout_store` now log a `WARNING` at start-up; see below.
+No code or configuration changes. New at start-up: a `WARNING` if
+`backchannel_logout=True` and no store is registered under `logout_store` (see below).
 
 ## Bug fixes
 
-- **A rejected session refresh is a proper `401` again** (regression in 0.3.5). With
-  `session_auto_refresh=True`, when Keycloak refused the refresh (session ended,
-  refresh token expired or revoked), the `401` came without its
-  `WWW-Authenticate: Bearer error="invalid_token", error_description="Token expired"`
-  challenge and with Litestar's default body instead of `{"error": "Token expired"}`;
-  an unreachable Keycloak raised `TokenEndpointError` instead of the documented
-  `SessionRefreshError` (still a `502`). The auth routes' own `401` for a refused code
-  exchange or refresh now carries the same challenge too; it is raised as the new
-  `TokenGrantRejectedError`.
+- **`session_auto_refresh`: a refused refresh sends its challenge again** (regression
+  in 0.3.5). Affects apps with `session_auto_refresh=True`. When Keycloak refuses the
+  refresh — the session ended, the refresh token expired or was revoked — the `401`
+  carries `WWW-Authenticate: Bearer error="invalid_token", error_description="Token expired"`
+  and the body `{"error": "Token expired"}` again; 0.3.5 sent neither. An unreachable
+  Keycloak raises `SessionRefreshError` again, as documented (still a `502`).
+
+  The auth routes' `401` for a refused code exchange or refresh now carries the same
+  challenge. If you catch exceptions yourself: that refusal is the new
+  `TokenGrantRejectedError`, an `AuthenticationError`.
 
 ## New
 
-- **`litestar_keycloak.testing`** ships `create_test_token` and `MockKeycloakPlugin`,
-  so a test suite imports them instead of copying them from this repository:
+- **`litestar_keycloak.testing`** ships `create_test_token` and `MockKeycloakPlugin`.
+  Import them in your tests instead of copying them from this repository:
 
   ```python
   from litestar_keycloak.testing import MockKeycloakPlugin, create_test_token
@@ -32,16 +33,7 @@ package, and warns when back-channel logouts cannot reach every instance.
   The signing key is generated at import and exists only in the test process.
 
 - **Start-up warning for a per-process logout store.** With `backchannel_logout=True`
-  and nothing registered under `logout_store`, Litestar hands each process its own
-  in-memory store, so on several instances Keycloak's logout reaches only one of them.
-  Register a shared store (e.g. Redis) under that name to silence it; a
-  `StoreRegistry` you pass in is trusted as is.
-
-## Tests
-
-`JOURNEYS.md` maps how developers meet the plugin and the HTTP journeys their services
-support, and ten new integration tests walk each journey end to end against real
-Keycloak — SPA and server-rendered sign-in, optional auth, `client_credentials`
-between two services, token exchange accepted by the downstream service, key
-rotation on a running app, and Keycloak going away. Walking them found the regression
-above. 395 unit and 46 integration tests.
+  and nothing registered under `logout_store`, each process gets its own in-memory
+  store, so on several instances Keycloak's logout reaches only one of them. Register
+  a shared store (e.g. Redis) under that name to silence it; a `StoreRegistry` you
+  pass in is trusted as is.
